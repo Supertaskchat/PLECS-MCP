@@ -9,12 +9,14 @@ array results are wrapped as ``{"result": ...}``.
 
 from __future__ import annotations
 
+import argparse
 from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
-from .client import PlecsError, PlecsRpcError, PlecsUnreachable, get_client
+from .client import PlecsClient, PlecsError, PlecsRpcError, PlecsUnreachable, get_client, set_client
+from .config import load_config
 from .codec import (
     PlecsPayloadError,
     base64_to_bytes,
@@ -23,6 +25,7 @@ from .codec import (
     summarize_tree,
     write_bytes,
 )
+from .summary import summarize_result
 
 mcp = FastMCP(
     name="PLECS",
@@ -61,7 +64,73 @@ def _maybe_save(result: Any, save_to: str | None, overwrite: bool) -> Any:
     return {"saved": meta, "note": "PLECS returned binary data; written to disk instead of inline base64"}
 
 
+def _with_summary(payload: Any, summary: bool) -> Any:
+    """Summaries are opt-in; binary results saved to disk stay untouched."""
+    if not summary:
+        return payload
+    if isinstance(payload, dict) and "saved" in payload:
+        return payload
+    if isinstance(payload, (dict, list)):
+        return {"summary": summarize_result(payload)}
+    return payload
+
+
+CONNECT_HINTS = (
+    "Start PLECS Standalone and open (or create) a model.",
+    "Enable Preferences -> RPC (remote control) and confirm the port matches.",
+    "Check the port is really listening: lsof -nP -iTCP:{port} -sTCP:LISTEN",
+    "PLECS only accepts localhost connections; keep host at 127.0.0.1.",
+    "If the port differs, set PLECS_RPC_PORT or edit config.yml.",
+)
+
+
 # ---------------------------------------------------------------- system / model
+
+@mcp.tool(name="plecs_connect")
+def plecs_connect(host: str = "", port: int = 0) -> dict[str, Any]:
+    """Handshake/health check with an explicit endpoint and troubleshooting hints.
+
+    Optional: every other tool connects lazily. Use this when you want to verify the
+    endpoint, pick a non-default host/port, or get an actionable error instead of a
+    bare "connection refused". Returns ``{"ok": true, ...}`` or ``{"ok": false, "hints": [...]}``.
+    """
+    cfg = load_config()
+    target_host = host or cfg.host
+    target_port = int(port or cfg.port)
+    endpoint = f"{target_host}:{target_port}"
+    client = PlecsClient(host=target_host, port=target_port)
+
+    try:
+        stats = client.call("plecs.statistics")
+    except PlecsError as exc:
+        client.close()
+        return {
+            "ok": False,
+            "endpoint": endpoint,
+            "error": str(exc),
+            "hints": [hint.format(port=target_port) for hint in CONNECT_HINTS],
+        }
+
+    set_client(client)
+    models = stats.get("models") or []
+    raw_version = stats.get("version")
+    if isinstance(raw_version, list):
+        version = ".".join(str(part) for part in raw_version[:3])
+        build = raw_version[3] if len(raw_version) > 3 else None
+    else:
+        version, build = raw_version, None
+    return {
+        "ok": True,
+        "endpoint": endpoint,
+        "config_source": cfg.source,
+        "version": version,
+        "build": build,
+        "uptime": stats.get("uptime"),
+        "has_server_license": stats.get("hasServerLicense"),
+        "open_models": [m.get("id") for m in models if not m.get("library")],
+        "model_count": len(models),
+    }
+
 
 @mcp.tool(name="plecs_list_methods")
 def plecs_list_methods() -> dict[str, Any]:
@@ -144,6 +213,7 @@ def plecs_simulate(
     save_to: str | None = None,
     overwrite: bool = False,
     timeout: float | None = None,
+    summary: bool = False,
 ) -> dict[str, Any]:
     """Run a simulation (blocking).
 
@@ -151,9 +221,11 @@ def plecs_simulate(
     pass a LIST of optStructs to let PLECS parallelize parameter sweeps.
     Only models with top-level Outports return data (``{"Time": [...], "Values": [...]}``;
     over JSON-RPC, Values is signals x time). ``save_to`` writes a MatFile result to disk.
+    ``summary=true`` replaces the raw arrays with per-signal min/max/mean/p2p/rms.
     """
     params: list[Any] = [model_name] if options is None else [model_name, options]
-    return _wrap(_maybe_save(_raw("plecs.simulate", params, timeout=timeout), save_to, overwrite))
+    payload = _maybe_save(_raw("plecs.simulate", params, timeout=timeout), save_to, overwrite)
+    return _wrap(_with_summary(payload, summary))
 
 
 @mcp.tool(name="plecs_analyze")
@@ -164,15 +236,18 @@ def plecs_analyze(
     save_to: str | None = None,
     overwrite: bool = False,
     timeout: float | None = None,
+    summary: bool = False,
 ) -> dict[str, Any]:
     """Run an analysis (blocking).
 
     ``analysis_name`` is the analysis NAME property (e.g. "Loop Gain (AC Sweep)"), not the
     tree node label ("AC Sweep"). AC/Impulse/Multitone return ``{F, Gr, Gi}``;
-    Steady-State returns ``{Time, Values}``.
+    Steady-State returns ``{Time, Values}``. ``summary=true`` replaces raw arrays with
+    magnitude/phase ranges plus gain crossover and phase margin (AC sweeps).
     """
     params: list[Any] = [model_name, analysis_name] if options is None else [model_name, analysis_name, options]
-    return _wrap(_maybe_save(_raw("plecs.analyze", params, timeout=timeout), save_to, overwrite))
+    payload = _maybe_save(_raw("plecs.analyze", params, timeout=timeout), save_to, overwrite)
+    return _wrap(_with_summary(payload, summary))
 
 
 # ---------------------------------------------------------------- scopes
@@ -310,7 +385,21 @@ def plecs_rpc(method: str, params: list[Any] | None = None, timeout: float | Non
 
 
 def main() -> None:
-    mcp.run(transport="stdio")
+    parser = argparse.ArgumentParser(prog="plecs-mcp", description="MCP server for Plexim PLECS")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http", "sse", "streamable-http"],
+        default="stdio",
+        help="stdio for local agents (default); http/sse for remote agents",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="bind address for http/sse")
+    parser.add_argument("--port", type=int, default=8765, help="bind port for http/sse")
+    args = parser.parse_args()
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(transport=args.transport, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

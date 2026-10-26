@@ -4,6 +4,7 @@ from fastmcp import Client
 from plecs_mcp.server import mcp
 
 EXPECTED = {
+    "plecs_connect",
     "plecs_list_methods",
     "plecs_method_help",
     "plecs_statistics",
@@ -55,3 +56,24 @@ async def test_destructive_tools_require_confirm():
             result = await client.call_tool(name, {"subsystem_path": "x"} if name == "plecs_protect" else {}, raise_on_error=False)
             assert result.is_error
             assert "confirm=true" in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_connect_returns_hints_when_unreachable(monkeypatch):
+    from plecs_mcp.client import PlecsUnreachable
+
+    class _StubClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def call(self, *args, **kwargs):
+            raise PlecsUnreachable("connection refused")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("plecs_mcp.server.PlecsClient", _StubClient)
+    async with Client(mcp) as client:
+        result = await client.call_tool("plecs_connect", {})
+    assert result.data["ok"] is False
+    assert len(result.data["hints"]) >= 3

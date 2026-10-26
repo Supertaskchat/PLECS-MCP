@@ -1,0 +1,8 @@
+# Optional PLECS-MCP settings. Environment variables win over this file.
+#   PLECS_RPC_HOST / PLECS_HOST
+#   PLECS_RPC_PORT / PLECS_PORT
+#   PLECS_RPC_TIMEOUT
+plecs:
+  host: "127.0.0.1"
+  port: 1080
+  timeout: 30

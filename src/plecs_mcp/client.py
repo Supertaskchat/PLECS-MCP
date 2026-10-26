@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import os
 import threading
 from typing import Any
 
 import httpx
 
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 1080
-DEFAULT_TIMEOUT = 30.0
+from .config import load_config
 
 
 class PlecsError(RuntimeError):
@@ -47,9 +43,11 @@ class PlecsClient:
     """Thread-safe client; every RPC call is serialized like the PLECS server itself."""
 
     def __init__(self, host: str | None = None, port: int | None = None, timeout: float | None = None) -> None:
-        self.host = host or os.getenv("PLECS_RPC_HOST", DEFAULT_HOST)
-        self.port = int(port or os.getenv("PLECS_RPC_PORT", DEFAULT_PORT))
-        self.timeout = float(timeout or os.getenv("PLECS_RPC_TIMEOUT", DEFAULT_TIMEOUT))
+        cfg = load_config()
+        self.host = host or cfg.host
+        self.port = int(port or cfg.port)
+        self.timeout = float(timeout or cfg.timeout)
+        self.source = cfg.source
         self._url = f"http://{self.host}:{self.port}/"
         # PLECS only ever listens on localhost: never route through system/env proxies.
         self._http = httpx.Client(base_url=self._url, trust_env=False)
@@ -106,3 +104,13 @@ def get_client() -> PlecsClient:
         if _client is None:
             _client = PlecsClient()
         return _client
+
+
+def set_client(client: PlecsClient) -> PlecsClient:
+    """Replace the singleton (used by plecs_connect after an explicit handshake)."""
+    global _client
+    with _client_lock:
+        previous, _client = _client, client
+    if previous is not None and previous is not client:
+        previous.close()
+    return client

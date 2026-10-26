@@ -52,6 +52,14 @@ def models(tmp_path_factory):
 
 
 @pytest.mark.asyncio
+async def test_connect_reports_handshake():
+    async with Client(mcp) as client:
+        result = (await client.call_tool("plecs_connect", {})).data
+    assert result["ok"] is True
+    assert result["version"]
+
+
+@pytest.mark.asyncio
 async def test_statistics_and_method_list():
     async with Client(mcp) as client:
         stats = (await client.call_tool("plecs_statistics", {})).data
@@ -92,6 +100,19 @@ async def test_simulate_returns_aligned_values(models):
         )).data
     assert sim["Time"], "expected simulation data from a model with a top-level outport"
     assert all(len(signal) == len(sim["Time"]) for signal in sim["Values"])
+
+
+@pytest.mark.asyncio
+async def test_simulate_summary(models):
+    name = models["out"].stem
+    async with Client(mcp) as client:
+        summary = (await client.call_tool(
+            "plecs_simulate",
+            {"model_name": name, "options": {"SolverOpts": {"TimeSpan": 5e-4}}, "summary": True},
+        )).data["summary"]
+    assert summary["kind"] == "time-series"
+    assert summary["time"]["points"] > 0
+    assert summary["signals"] and summary["signals"][0]["rms"] is not None
 
 
 @pytest.mark.asyncio
