@@ -17,6 +17,7 @@ from fastmcp.exceptions import ToolError
 
 from .client import PlecsClient, PlecsError, PlecsRpcError, PlecsUnreachable, get_client, set_client
 from .config import load_config
+from .launcher import find_plecs_app, launch_plecs, wait_for_port
 from .codec import (
     PlecsPayloadError,
     base64_to_bytes,
@@ -87,29 +88,76 @@ CONNECT_HINTS = (
 # ---------------------------------------------------------------- system / model
 
 @mcp.tool(name="plecs_connect")
-def plecs_connect(host: str = "", port: int = 0) -> dict[str, Any]:
-    """Handshake/health check with an explicit endpoint and troubleshooting hints.
+def plecs_connect(
+    host: str = "",
+    port: int = 0,
+    auto_start: bool = True,
+    startup_timeout: float = 30.0,
+    app_path: str = "",
+) -> dict[str, Any]:
+    """Handshake/health check; starts PLECS automatically when the RPC port is closed.
 
-    Optional: every other tool connects lazily. Use this when you want to verify the
-    endpoint, pick a non-default host/port, or get an actionable error instead of a
-    bare "connection refused". Returns ``{"ok": true, ...}`` or ``{"ok": false, "hints": [...]}``.
+    If the endpoint is unreachable and ``auto_start`` is true (default), the newest
+    ``/Applications/PLECS*.app`` (or ``PLECS_APP_PATH``/``app_path``) is opened with
+    ``open -a`` and the RPC port is polled for up to ``startup_timeout`` seconds.
+    Set ``auto_start=false`` for a pure health check. Returns
+    ``{"ok": true, "started": ..., ...}`` or ``{"ok": false, "launch": {...}, "hints": [...]}``.
     """
     cfg = load_config()
     target_host = host or cfg.host
     target_port = int(port or cfg.port)
     endpoint = f"{target_host}:{target_port}"
     client = PlecsClient(host=target_host, port=target_port)
+    hints = [hint.format(port=target_port) for hint in CONNECT_HINTS]
 
-    try:
-        stats = client.call("plecs.statistics")
-    except PlecsError as exc:
+    def failure(error: str, *, launch: dict[str, Any] | None = None, startup_seconds: float | None = None,
+                extra_hints: tuple[str, ...] = ()) -> dict[str, Any]:
         client.close()
         return {
             "ok": False,
             "endpoint": endpoint,
-            "error": str(exc),
-            "hints": [hint.format(port=target_port) for hint in CONNECT_HINTS],
+            "error": error,
+            "started": False,
+            "launch": launch,
+            "startup_seconds": startup_seconds,
+            "hints": list(extra_hints) + hints,
         }
+
+    try:
+        stats = client.call("plecs.statistics")
+        started = False
+        launch: dict[str, Any] | None = None
+        startup_seconds: float | None = None
+    except PlecsError as exc:
+        if not auto_start:
+            return failure(str(exc))
+
+        app = find_plecs_app(app_path or None)
+        if app is None:
+            return failure(
+                "PLECS is not reachable and no PLECS app bundle was found",
+                launch={"ok": False, "app": None, "error": "set PLECS_APP_PATH to the .app bundle"},
+            )
+
+        launch = launch_plecs(app)
+        if not launch["ok"]:
+            return failure(f"could not start PLECS: {launch['error']}", launch=launch)
+
+        startup_seconds = wait_for_port(target_host, target_port, startup_timeout)
+        if startup_seconds is None:
+            return failure(
+                f"started {app.name} but the RPC port did not open within {startup_timeout:g}s",
+                launch=launch,
+                extra_hints=(
+                    "PLECS is running: enable Preferences -> RPC and confirm the port, then retry.",
+                ),
+            )
+
+        try:
+            stats = client.call("plecs.statistics")
+        except PlecsError as exc2:
+            return failure(str(exc2), launch=launch, startup_seconds=startup_seconds)
+        started = True
 
     set_client(client)
     models = stats.get("models") or []
@@ -122,6 +170,9 @@ def plecs_connect(host: str = "", port: int = 0) -> dict[str, Any]:
     return {
         "ok": True,
         "endpoint": endpoint,
+        "started": started,
+        "launch": launch,
+        "startup_seconds": startup_seconds,
         "config_source": cfg.source,
         "version": version,
         "build": build,

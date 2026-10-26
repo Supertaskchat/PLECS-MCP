@@ -87,12 +87,36 @@ plecs:
 | `PLECS_RPC_HOST` (or `PLECS_HOST`) | `127.0.0.1` | Localhost only (PLECS restriction) |
 | `PLECS_RPC_PORT` (or `PLECS_PORT`) | `1080` | Must match the PLECS preference |
 | `PLECS_RPC_TIMEOUT` | `30` | Read timeout in seconds for non-simulation calls |
+| `PLECS_APP_PATH` | auto-detect | Explicit `.app` bundle for auto-start (e.g. `/Applications/PLECS 4.9.app`) |
+
+## Startup behaviour
+
+Only `plecs_connect` launches PLECS; everything else stays passive.
+
+1. It probes `host:port`. If the RPC port answers, nothing is started (`"started": false`).
+2. If the port is closed and `auto_start=true` (default), it picks the newest
+   `/Applications/PLECS*.app` (or `PLECS_APP_PATH` / the `app_path` argument) and runs
+   `open -a "<bundle>"`.
+3. It then polls the port for up to `startup_timeout` seconds (default 30) and retries
+   `plecs.statistics`. The result reports `started`, `launch` and `startup_seconds`.
+
+```python
+# pure health check, never launch anything
+plecs_connect(auto_start=False)
+# pin a specific installation (multiple versions on one machine)
+plecs_connect(app_path="/Applications/PLECS 4.9.app", startup_timeout=60)
+```
+
+Notes: auto-start is implemented for macOS app bundles only; other platforms return a
+clear `launch.error`. Launching fails cleanly (with hints) if PLECS is installed
+elsewhere, if the GUI cannot be opened, or if PLECS starts but the RPC preference is
+still disabled.
 
 ## Tools
 
 | Tool | RPC method | Notes |
 |---|---|---|
-| `plecs_connect` | `plecs.statistics` | Optional handshake: endpoint, version, open models, actionable hints |
+| `plecs_connect` | `plecs.statistics` | Handshake; **starts PLECS automatically** when the RPC port is closed, then reports version/open models |
 | `plecs_list_methods` | `system.listMethods` | Capability discovery for the running build |
 | `plecs_method_help` | `system.methodHelp` | PLECS's own help text |
 | `plecs_statistics` | `plecs.statistics` | Licence hints, open models, run state |
@@ -149,6 +173,7 @@ Every tool returns a JSON object, so MCP clients get structured content:
 7. `plecs.save(model, save_as)` **renames** the open model; later calls must use the new name.
 8. Business errors still return **HTTP 200**; the error lives in the JSON `error` field and is translated into a tool error.
 9. The client uses `trust_env=False`: macOS system proxies can hijack `127.0.0.1:1080` and return HTTP 502, so PLECS is **never** reached through a proxy.
+10. Auto-start opens the GUI bundle; a PLECS instance whose RPC preference is off will still fail the port poll, and the result tells you to enable it.
 
 ## Tests
 
@@ -156,8 +181,9 @@ Every tool returns a JSON object, so MCP clients get structured content:
 .venv/bin/python -m pytest -q
 ```
 
-- Unit: base64/model tree/file writing, summary maths, config precedence
-- Surface: all 24 tools registered with descriptions; destructive tools require confirmation; `plecs_connect` degrades to hints
+- Unit: base64/model tree/file writing, summary maths, config precedence, app discovery/launch/port polling
+- Surface: all 24 tools registered with descriptions; destructive tools require confirmation;
+  `plecs_connect` degrades to hints and covers the auto-start branch with a fake launcher
 - Integration: when `127.0.0.1:1080` is reachable, runs `connect → load → tree → get → simulate (raw + summary) → scope CSV` on `/tmp` copies of the bundled demos (user models are never touched)
 
 ## Layout
@@ -167,6 +193,7 @@ src/plecs_mcp/client.py   JSON-RPC client (serialized calls, timeouts, error map
 src/plecs_mcp/config.py   config.yml + environment resolution
 src/plecs_mcp/codec.py    base64 decoding, model-tree summary, file output
 src/plecs_mcp/summary.py  time-series statistics and Bode margins
+src/plecs_mcp/launcher.py macOS app discovery, `open -a` launch, port polling
 src/plecs_mcp/server.py   24 MCP tools
 examples/quickstart.py    end-to-end smoke test
 tests/                    unit + surface + integration

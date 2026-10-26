@@ -74,6 +74,72 @@ async def test_connect_returns_hints_when_unreachable(monkeypatch):
 
     monkeypatch.setattr("plecs_mcp.server.PlecsClient", _StubClient)
     async with Client(mcp) as client:
-        result = await client.call_tool("plecs_connect", {})
+        result = await client.call_tool("plecs_connect", {"auto_start": False})
     assert result.data["ok"] is False
     assert len(result.data["hints"]) >= 3
+
+
+@pytest.mark.asyncio
+async def test_connect_starts_plecs_when_unreachable(monkeypatch):
+    from plecs_mcp import client as client_module
+    from plecs_mcp.client import PlecsUnreachable
+
+    class _FlakyClient:
+        instances = []
+
+        def __init__(self, *args, **kwargs):
+            self.calls = 0
+            _FlakyClient.instances.append(self)
+
+        def call(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise PlecsUnreachable("connection refused")
+            return {"version": [5, 0, 6, "build"], "models": [], "hasServerLicense": True}
+
+        def close(self):
+            pass
+
+    saved = client_module._client
+    monkeypatch.setattr("plecs_mcp.server.PlecsClient", _FlakyClient)
+    monkeypatch.setattr("plecs_mcp.server.find_plecs_app", lambda *_a, **_k: __import__("pathlib").Path("/Applications/PLECS 5.0.app"))
+    monkeypatch.setattr("plecs_mcp.server.launch_plecs", lambda app: {"ok": True, "app": str(app), "error": None})
+    monkeypatch.setattr("plecs_mcp.server.wait_for_port", lambda *_a, **_k: 1.5)
+    try:
+        async with Client(mcp) as client:
+            result = await client.call_tool("plecs_connect", {})
+        assert result.data["ok"] is True
+        assert result.data["started"] is True
+        assert result.data["startup_seconds"] == 1.5
+        assert result.data["version"] == "5.0.6"
+        assert _FlakyClient.instances[0].calls == 2
+    finally:
+        client_module._client = saved
+
+
+@pytest.mark.asyncio
+async def test_connect_reports_missing_bundle(monkeypatch):
+    from plecs_mcp import client as client_module
+    from plecs_mcp.client import PlecsUnreachable
+
+    class _StubClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def call(self, *args, **kwargs):
+            raise PlecsUnreachable("connection refused")
+
+        def close(self):
+            pass
+
+    saved = client_module._client
+    monkeypatch.setattr("plecs_mcp.server.PlecsClient", _StubClient)
+    monkeypatch.setattr("plecs_mcp.server.find_plecs_app", lambda *_a, **_k: None)
+    try:
+        async with Client(mcp) as client:
+            result = await client.call_tool("plecs_connect", {})
+        assert result.data["ok"] is False
+        assert result.data["launch"]["ok"] is False
+        assert "PLECS_APP_PATH" in result.data["launch"]["error"]
+    finally:
+        client_module._client = saved

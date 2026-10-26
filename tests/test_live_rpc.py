@@ -57,6 +57,7 @@ async def test_connect_reports_handshake():
         result = (await client.call_tool("plecs_connect", {})).data
     assert result["ok"] is True
     assert result["version"]
+    assert result["started"] is False  # PLECS is already running for these tests
 
 
 @pytest.mark.asyncio
