@@ -4,6 +4,23 @@ from fastmcp import Client
 from plecs_mcp.server import mcp
 
 EXPECTED = {
+    "plecs_overview",
+    "plecs_validate",
+    "plecs_capture",
+    "plecs_plot",
+    "plecs_submit",
+    "plecs_task",
+    "plecs_task_result",
+    "plecs_tasks",
+    "plecs_check",
+    "plecs_library_search",
+    "plecs_scan",
+    "plecs_model_clone",
+    "plecs_artifacts",
+    "plecs_fmu_info",
+    "plecs_analyze_data",
+    "plecs_diagnose",
+    "plecs_instances",
     "plecs_connect",
     "plecs_list_methods",
     "plecs_method_help",
@@ -23,6 +40,7 @@ EXPECTED = {
     "plecs_run_script",
     "plecs_compare",
     "plecs_batch",
+    "plecs_model_edit",
     "plecs_state_space",
     "plecs_extract_execution_log_data",
     "plecs_set_cosim_server_enabled",
@@ -90,6 +108,8 @@ async def test_connect_starts_plecs_when_unreachable(monkeypatch):
         instances = []
 
         def __init__(self, *args, **kwargs):
+            self.host = "127.0.0.1"
+            self.port = 1080
             self.calls = 0
             _FlakyClient.instances.append(self)
 
@@ -105,7 +125,7 @@ async def test_connect_starts_plecs_when_unreachable(monkeypatch):
         def methods(self):
             return {"plecs.statistics", "plecs.save"}
 
-    saved = client_module._client
+    saved = (client_module._active, dict(client_module._clients))
     monkeypatch.setattr("plecs_mcp.server.PlecsClient", _FlakyClient)
     monkeypatch.setattr("plecs_mcp.server.plecs_running", lambda: False)
     monkeypatch.setattr("plecs_mcp.server.find_plecs_app", lambda *_a, **_k: __import__("pathlib").Path("/Applications/PLECS 5.0.app"))
@@ -120,7 +140,7 @@ async def test_connect_starts_plecs_when_unreachable(monkeypatch):
         assert result.data["version"] == "5.0.6"
         assert _FlakyClient.instances[0].calls == 2
     finally:
-        client_module._client = saved
+        client_module._active, client_module._clients = saved
 
 
 @pytest.mark.asyncio
@@ -138,7 +158,7 @@ async def test_connect_reports_missing_bundle(monkeypatch):
         def close(self):
             pass
 
-    saved = client_module._client
+    saved = (client_module._active, dict(client_module._clients))
     monkeypatch.setattr("plecs_mcp.server.PlecsClient", _StubClient)
     monkeypatch.setattr("plecs_mcp.server.plecs_running", lambda: False)
     monkeypatch.setattr("plecs_mcp.server.find_plecs_app", lambda *_a, **_k: None)
@@ -149,4 +169,4 @@ async def test_connect_reports_missing_bundle(monkeypatch):
         assert result.data["launch"]["ok"] is False
         assert "PLECS_APP_PATH" in result.data["launch"]["error"]
     finally:
-        client_module._client = saved
+        client_module._active, client_module._clients = saved

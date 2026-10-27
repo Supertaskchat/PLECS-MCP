@@ -10,6 +10,10 @@ Highlights:
 - Read-only RPC calls run concurrently with a simulation; blocking/mutating calls are serialized
 - Write guardrails: install dirs are refused, stray paths need `PLECS_MCP_ALLOWED_ROOTS`, overwrites need `overwrite=true`
 - Irreversible operations (`protect`, `crash`) require `confirm=true`
+- MCP **resources** ship the RPC/analysis/error references the agent needs
+- Scope bitmaps and generated waveforms/Bode plots come back as **inline PNG images**
+- Async tasks (`submit`/`task`/`task_result`), acceptance checks, component-library search,
+  file-level model cloning and local FFT/THD post-processing
 
 ## Requirements
 
@@ -94,11 +98,14 @@ plecs:
 | `PLECS_MCP_ALLOWED_ROOTS` | `~`, `/tmp`, system temp | Write roots (`:`-separated) |
 | `PLECS_MCP_LOG_LEVEL` | `INFO` | RPC timing/error logging on stderr |
 | `PLECS_MCP_ALLOW_REMOTE` | – | Allow non-loopback HTTP bind |
+| `PLECS_MCP_AUTO_START` | `always` | Default for `plecs_connect` (`always` / `never`) |
 | `PLECS_EXECUTABLE` | auto-detect | PLECS binary/bundle used by auto-start (alias: `PLECS_APP_PATH`) |
+| `PLECS_LIBRARY_PATH` | auto-detect | Explicit `Components.plecs` for offline library search |
 
 ## Auto-start
 
-`plecs_connect(auto_start=True)` (default) probes `host:port`; if the port is closed it locates
+`plecs_connect(auto_start=True)` (default, configurable with `PLECS_MCP_AUTO_START=never` or
+`--auto-start never`) probes `host:port`; if the port is closed it locates
 the newest install **for the host OS**, launches it, and polls the port for `startup_timeout`
 (default 30 s):
 
@@ -142,6 +149,21 @@ PLECS RPC is localhost-only, so the MCP server and PLECS must run on the same ma
 | `plecs_protect` | `plecs.protect` | Irreversible once saved; `confirm=true` |
 | `plecs_crash` | `plecs.crash` | Terminates PLECS; `confirm=true` |
 | `plecs_batch` | any | Several RPC calls in one tool call, per-call errors inline |
+| `plecs_overview` | tree + get + statistics | One-call model briefing (solver, analyses, scopes, outports) |
+| `plecs_validate` | tree + get | Structural pre-flight checks (errors/warnings) |
+| `plecs_capture` | `webserver getScopeBitmap` | Scope screenshot as an **inline PNG** |
+| `plecs_plot` | simulate / analyze | Waveform or Bode PNG — **PLECS bitmap by default**, matplotlib fallback |
+| `plecs_submit` / `plecs_task` / `plecs_task_result` / `plecs_tasks` | simulate/analyze/codegen | Background tasks with polling |
+| `plecs_check` | simulate + analyze | Pass/fail assertions (signal/time/analysis metrics) |
+| `plecs_library_search` | `getModelTree(Components.plecs)` | Search the installed component library |
+| `plecs_scan` | – | Regex-search a `.plecs` file without opening it |
+| `plecs_model_clone` | – | Copy/rename/patch a model file, then load-validate |
+| `plecs_model_edit` | – | Structural edits: add/remove component, set parameter, wire, add outport |
+| `plecs_artifacts` | – | List codegen/FMU output files |
+| `plecs_fmu_info` | – | Read `modelDescription.xml` from an FMU |
+| `plecs_analyze_data` | – | Metrics + FFT/THD on a saved JSON result |
+| `plecs_diagnose` | – | Explain a PLECS error string |
+| `plecs_instances` | – | Known endpoints, active one flagged |
 | `plecs_rpc` | any | Raw passthrough |
 
 ### Return shape
@@ -166,6 +188,77 @@ Every tool returns a JSON object (structured content):
 
 Writes are refused inside `/Applications`, `/System`, `/Library`, `/usr`, `/bin`, `/sbin`, `/etc`,
 and outside `PLECS_MCP_ALLOWED_ROOTS`. Existing files are never overwritten without `overwrite=true`.
+
+## MCP resources
+
+The server exposes reference documents as MCP resources (no tool call needed):
+
+| URI | Content |
+|---|---|
+| `plecs://docs/quickstart` | end-to-end workflow |
+| `plecs://docs/rpc` | RPC method table and quirks |
+| `plecs://docs/analysis` | SolverOpts/ModelVars/analysis result shapes |
+| `plecs://docs/errors` | symptom → cause → next step |
+| `plecs://docs/limits` | data policy and write guardrails |
+
+## Images and plots
+
+- `plecs_capture(model[, scope|analysis_name])` returns the PLECS scope/analysis bitmap as an MCP image.
+- `plecs_plot(..., renderer="auto")` — **default: PLECS-rendered bitmap** (same styling as the GUI).
+  `renderer="plecs"` forces it (error if no Scope/analysis plot exists);
+  `renderer="matplotlib"` renders locally and is the only way to overlay several responses.
+- Waveform: runs a short simulation (default TimeSpan 1e-3 s); `renderer="plecs"` captures the model Scope,
+  `matplotlib` plots the top-level outports (requires at least one).
+- Bode: runs `plecs.analyze` then captures `<model>/Analyses/<Name property>`; matplotlib uses `F/Gr/Gi`.
+- Both accept `save_to` (write a PNG) and `inline=false` (metadata: `renderer`, `bytes`).
+
+## Async tasks
+
+`plecs_submit("plecs.simulate", [model, opts])` returns `{id, status}`; poll with
+`plecs_task(id)` and fetch with `plecs_task_result(id)`. Only blocking methods are accepted, PLECS
+still runs one at a time, and large results are stored as summary + file path.
+
+Task records are persisted to `PLECS_MCP_TASK_DIR` (default `~/.plecs-mcp/tasks`). After a server
+restart, finished tasks are still readable and anything that was running is reported as `lost`
+instead of pretending to be in progress.
+
+## Acceptance checks
+
+`plecs_check(model, checks, options=..., analysis_name=...)` runs the needed simulation/analysis
+and evaluates assertions:
+
+```json
+[{"type": "signal", "index": 0, "metric": "rms", "op": ">", "value": 10},
+ {"type": "time",   "metric": "stop", "op": ">=", "value": 0.001},
+ {"type": "analysis", "metric": "phase_margin_deg", "op": ">", "value": 45}]
+```
+
+The response contains `passed`, per-check `actual`/`pass`, and the summaries used.
+
+## Discovery and file-level editing
+
+- `plecs_library_search("resistor")` parses the installed `Components.plecs` **as text** (≈9.7k
+  components, 0.6 s cold / 5 ms cached) — works without PLECS and without the 43 MB RPC tree.
+  Cache lives next to the output dir; `refresh=true` rebuilds it.
+  `backend="auto"` (default) keeps the RPC model tree as a **fallback**: if the file is missing,
+  unreadable, corrupt, or yields 0 components, the call ensures a PLECS connection first —
+  **starting PLECS automatically** when it is not running (same policy as `plecs_connect`) —
+  then retries over RPC and reports `backend="rpc"`, `fallback_reason` and `autostarted`.
+  If PLECS is not installed (or its RPC preference is off), the error says so.
+  Use `backend="text"` or `"rpc"` to force one path.
+- `plecs_scan(path, "TimeSpan")` greps model text without loading it.
+- `plecs_model_edit(path, operations, confirm|output)` performs **structural** edits on a copy of a
+  `.plecs` file: add/remove components, set parameters, wire terminals, add outports. Everything
+  outside the edited span stays byte-identical; the result is loaded in PLECS to verify.
+  This is the alternative to schematic editing, which the RPC does not expose.
+- `plecs_model_clone(...)` remains for copy + regex-level rewrites.
+- `plecs_artifacts(dir)` / `plecs_fmu_info(path)` inspect codegen output and FMU metadata.
+
+## Local post-processing
+
+`plecs_analyze_data(result_path, fundamental=50)` works on a saved JSON result (the ones written
+by the inline-point limit): per-signal metrics plus FFT-based THD and harmonic amplitudes. This
+covers the "arbitrary code execution" gap without touching PLECS' console.
 
 ## Concurrency
 
@@ -199,6 +292,8 @@ and a second `simulate` still waits for the first. The client mirrors that:
 - The RPC model tree exposes outport **names and positions but no port index**, so channel `i` is not
   auto-labelled; `summary.outports` is provided instead of guessing.
 - `.trace` files (`scope SaveTraces`) use a private format and are not parsed.
+- `plecs_model_edit` handles structure (components/params/wires/outports) but does **not** do
+  automatic layout or route wires around obstacles; coordinates are caller-supplied.
 - Gain crossover/phase margin only make sense for loop-gain AC sweeps; other analysis kinds are labelled.
 - Auto-start picks the newest install for the **host** OS: macOS `/Applications/PLECS*.app`,
   Windows `%ProgramFiles%\Plexim\*\plecs.exe`, Linux `plecs` on `PATH` or `/opt/plecs*/plecs`.
@@ -221,6 +316,27 @@ plecs_webserver("getScopeCsv", [f"{model}/Scope"], time_range=[0, 1e-3], decimat
 # state space at one switch combination
 plecs_state_space(model, {"FET": 1, "D": 0})
 
+# acceptance gate
+plecs_check(model, [{"type": "signal", "index": 0, "metric": "rms", "op": ">", "value": 10},
+                    {"type": "analysis", "metric": "phase_margin_deg", "op": ">", "value": 45}],
+            analysis_name="Loop Gain (AC Sweep)")
+
+# background run + poll
+plecs_submit("plecs.simulate", [model, {"SolverOpts": {"TimeSpan": 0.5}}])
+plecs_task("<id>"); plecs_task_result("<id>")
+
+# figure (PLECS-rendered by default)
+plecs_plot(model, kind="bode", analysis_name="Loop Gain (AC Sweep)")
+plecs_plot(model, kind="waveform", renderer="matplotlib")   # only for overlays
+
+# structural model edit
+plecs_model_edit(path, confirm=True, operations=[
+  {"op": "add_component", "type": "Resistor", "name": "R2",
+   "position": [400, 200], "parameters": {"R": "10"}},
+  {"op": "connect", "source": "V_dc", "source_terminal": 1,
+   "target": "R2", "target_terminal": 1},
+  {"op": "add_outport", "name": "Vout", "position": [600, 200]}])
+
 # cheap multi-read
 plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
              {"method": "plecs.get", "params": [f"{model}/C1", "C"]}])
@@ -242,10 +358,11 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 50 tests
+.venv/bin/python -m pytest -q      # 81 tests
 ```
 
-- Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch
+- Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
+  plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources
 - Surface: all 26 tools registered/documented; destructive tools need confirmation; batch/limits/guards
 - Integration: when `127.0.0.1:1080` is reachable, exercises connect/load/tree/get/simulate/summary/CSV
   on `/tmp` copies of the bundled demos (user models are never touched)
@@ -263,7 +380,18 @@ src/plecs_mcp/session.py   model registry (path, dirty flag, rename tracking)
 src/plecs_mcp/codec.py     base64 decoding, tree/compare parsing, CSV slicing
 src/plecs_mcp/summary.py   time-series statistics, Bode margins, analysis kinds
 src/plecs_mcp/launcher.py  per-OS discovery/launch, port polling, process check
-src/plecs_mcp/server.py    26 MCP tools
+src/plecs_mcp/diagnose.py  error → cause → next steps
+src/plecs_mcp/resources.py MCP reference documents
+src/plecs_mcp/plotting.py  waveform/Bode PNG rendering
+src/plecs_mcp/tasks.py     background task registry
+src/plecs_mcp/checks.py    declarative acceptance checks
+src/plecs_mcp/library.py   component-library browsing (RPC tree fallback)
+src/plecs_mcp/library_text.py Components.plecs text parser + disk cache
+src/plecs_mcp/plecsfile.py .plecs parser and structural editor
+src/plecs_mcp/modelops.py  model scan/clone
+src/plecs_mcp/artifacts.py codegen output + FMU metadata
+src/plecs_mcp/data.py      local metrics/FFT/THD
+src/plecs_mcp/server.py    44 MCP tools + 5 resources
 examples/quickstart.py     end-to-end smoke test
 tests/                     unit + surface + integration
 ```

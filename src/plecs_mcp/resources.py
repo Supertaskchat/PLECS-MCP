@@ -1,0 +1,109 @@
+"""Static Markdown resources served over MCP (the "skills" counterpart)."""
+
+from __future__ import annotations
+
+DOCS: dict[str, tuple[str, str]] = {
+    "quickstart": (
+        "PLECS-MCP quickstart",
+        """# PLECS-MCP quickstart
+
+1. `plecs_connect()` — verifies the endpoint (and starts PLECS on this host if needed).
+2. `plecs_get_model_tree(path, summary=True)` — learn model name, analyses, subsystems, scopes.
+3. `plecs_simulate(model, {"SolverOpts": {"TimeSpan": 1e-3}}, summary=True)` — time-domain data.
+4. `plecs_analyze(model, "<analysis Name property>", summary=True)` — Bode / margins.
+5. `plecs_webserver("getScopeCsv", [f"{model}/Scope"])` — scope waveforms.
+6. `plecs_close(model)` — refuses if this session changed parameters (`force=true` to discard).
+
+Paths: a model is addressed by the name returned from `plecs_load`; components use
+`model/Subsystem/Component` with `/` separators.
+""",
+    ),
+    "rpc": (
+        "PLECS RPC reference",
+        """# PLECS RPC reference (verified on 5.0.6)
+
+Transport: JSON-RPC 2.0 over HTTP on `127.0.0.1:1080` (localhost only).
+`plecs_list_methods` shows what the running build supports.
+
+| Method | Notes |
+|---|---|
+| `plecs.load(path)` | absolute path; returns 0 (the model name is the file stem) |
+| `plecs.close(model)` | never saves |
+| `plecs.save(model[, path])` | saving to a new path **renames** the open model |
+| `plecs.get(path[, param])` | values are strings; `StateSpaceOrder` / `SystemState` / `Topology` are special params |
+| `plecs.set(path, param, value)` | values are PLECS expressions ("48", "L*2") |
+| `plecs.simulate(model, optStruct or list)` | only `SolverOpts` is honoured; `Values` is signals x time over JSON-RPC |
+| `plecs.analyze(model, analysisName, optStruct)` | `analysisName` is the Name property; AC returns `{F, Gr, Gi}` |
+| `plecs.scope(path, cmd, ...)` | HoldTrace / RemoveTrace / ClearTraces / SaveTraces / LoadTraces only |
+| `plecs.webserver(cmd, ...)` | undocumented data channel: getScopeCsv / getScopeBitmap / getCircuitBitmap … |
+| `plecs.compare(a, b)` | one multi-line string of `MergedItem(...)` entries |
+| `plecs.extractExecutionLogData()` | solver/Jacobian counters for the last run |
+
+`plecs.runScript` is listed but rejects every wire shape on 5.0.6.
+""",
+    ),
+    "analysis": (
+        "Simulation and analysis options",
+        """# Simulation and analysis options
+
+## SolverOpts (the only nesting PLECS reads)
+
+```
+{"SolverOpts": {"TimeSpan": 1e-3, "MaxStep": 1e-6, "Solver": "auto",
+                "RelTol": 1e-4, "AbsTol": 1e-6, "Timeout": 600}}
+```
+
+A flat `{"StopTime": ...}` is **silently ignored** — the model then runs its configured TimeSpan.
+
+## ModelVars
+
+```
+{"ModelVars": {"Vin": 48, "R_load": 10}}
+```
+Overrides are applied after initialization commands and before component parameters.
+
+## Output
+
+`{"OutputFormat": "Plain"}` (default) returns arrays; `"MatFile"` returns base64 MAT.
+Only models with top-level **Signal Outport** blocks return data; otherwise use scope CSV.
+
+## Analyses
+
+AC Sweep / Impulse / Multitone / Frequency Response return `{F, Gr, Gi}` (complex transfer
+functions). Steady-State returns `{Time, Values}`. `analysis_name` must equal the analysis'
+**Name** property (e.g. `Loop Gain (AC Sweep)`).
+
+Gain crossover and phase margin are only meaningful for loop-gain AC sweeps.
+""",
+    ),
+    "errors": (
+        "Troubleshooting PLECS errors",
+        """# Troubleshooting
+
+| Symptom | Cause | Next step |
+|---|---|---|
+| `Cannot find analysis named` | node label used instead of the Name property | `plecs_get_model_tree(..., summary=True)` |
+| `Invalid scope command 'ExportCSV'` | RPC has no CSV export | `plecs_webserver("getScopeCsv", [scope])` |
+| `Switch vector length mismatch` | wrong number of switch positions | `plecs_state_space(model)` lists the order |
+| `Algebraic loop …` | loop cannot be broken | solver option / add delay / tolerance |
+| `… exceeded maximum runtime` | `SolverOpts.Timeout` elapsed | raise timeout or shorten TimeSpan |
+| `Cannot export FMU for non-atomic subsystem` | subsystem not atomic | enable "Treat as atomic unit" |
+| `cannot reach PLECS` | RPC disabled or PLECS not running | `plecs_connect()` (auto-starts) |
+| `refusing to overwrite` | file exists | pass `overwrite=true` |
+| `outside PLECS_MCP_ALLOWED_ROOTS` | write guard | write under the output dir |
+""",
+    ),
+    "limits": (
+        "Data policy and limits",
+        """# Data policy
+
+- Simulations above `PLECS_MCP_MAX_INLINE_POINTS` (20000) are written as JSON to
+  `PLECS_MCP_OUTPUT_DIR` and returned as a summary.
+- Scope CSV above `PLECS_MCP_MAX_CSV_ROWS` (50000) is written to a file with a 5-row preview.
+- `time_range` / `decimate` are applied client-side (PLECS ignores its own options).
+- `summary=true` returns `min/max/mean/p2p/rms` per signal and Bode margins for AC sweeps.
+- Writes are refused inside `/Applications`, `/System`, `/Library`, `/usr`, `/bin`, `/etc`.
+- `plecs_close` rejects models modified through `plecs_set` unless `force=true`.
+""",
+    ),
+}

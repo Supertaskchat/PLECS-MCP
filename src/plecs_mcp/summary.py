@@ -58,6 +58,11 @@ def _stats(samples: list[float]) -> dict[str, Any]:
     }
 
 
+def signal_channels(values: Any, points: int) -> list[list[float]]:
+    """Public wrapper around the orientation normaliser used by summaries/plots."""
+    return _channels(values, points)
+
+
 def summarize_time_series(result: dict[str, Any]) -> dict[str, Any]:
     time = _numbers(result.get("Time") or [])
     channels = _channels(result.get("Values"), len(time))

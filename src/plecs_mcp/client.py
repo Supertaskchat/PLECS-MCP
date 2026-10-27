@@ -166,24 +166,39 @@ class PlecsClient:
         self._http.close()
 
 
-_client: PlecsClient | None = None
+_clients: dict[tuple[str, int], PlecsClient] = {}
+_active: tuple[str, int] | None = None
 _client_lock = threading.Lock()
 
 
-def get_client() -> PlecsClient:
-    """Process-wide singleton client (shares the call lock across tools)."""
-    global _client
+def get_client(host: str | None = None, port: int | None = None) -> PlecsClient:
+    """Client for one endpoint; without arguments returns the active instance."""
+    global _active
     with _client_lock:
-        if _client is None:
-            _client = PlecsClient()
-        return _client
+        if host is None and port is None:
+            if _active is None:
+                client = PlecsClient()
+                _active = (client.host, client.port)
+                _clients[_active] = client
+                return client
+            return _clients[_active]
+        client = PlecsClient(host=host, port=port)
+        _clients[(client.host, client.port)] = client
+        return client
 
 
 def set_client(client: PlecsClient) -> PlecsClient:
-    """Replace the singleton (used by plecs_connect after an explicit handshake)."""
-    global _client
+    """Make ``client`` the active endpoint (already-open instances stay usable)."""
+    global _active
     with _client_lock:
-        previous, _client = _client, client
-    if previous is not None and previous is not client:
-        previous.close()
+        _clients[(client.host, client.port)] = client
+        _active = (client.host, client.port)
     return client
+
+
+def list_clients() -> list[dict[str, object]]:
+    with _client_lock:
+        return [
+            {"endpoint": f"{host}:{port}", "active": (host, port) == _active}
+            for host, port in _clients
+        ]

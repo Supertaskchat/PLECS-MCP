@@ -113,17 +113,15 @@ def write_bytes(path: str | Path, data: bytes, overwrite: bool = False) -> dict[
 
 
 def outports_from_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
-    """Top-level Signal Outport components (PLECS does not expose a port index)."""
-    found: list[dict[str, Any]] = []
+    """Top-level Signal Outports only (nested subsystem ports are not model outputs).
 
-    def walk(node: dict[str, Any]) -> None:
-        if _property(node, "Library type") == "Signal Outport":
-            found.append({"name": _property(node, "Name"), "position": _property(node, "Position")})
-        for child in _children(node):
-            walk(child)
-
-    walk(tree)
-    return found
+    PLECS does not expose a port index over RPC; names/positions are returned instead.
+    """
+    return [
+        {"name": _property(child, "Name"), "position": _property(child, "Position")}
+        for child in _children(tree)
+        if _property(child, "Library type") == "Signal Outport"
+    ]
 
 
 def parse_merged_items(lines: Any) -> list[dict[str, Any]]:
