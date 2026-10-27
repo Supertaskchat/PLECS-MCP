@@ -145,6 +145,27 @@ dialog and are not returned over RPC. To continue without GUI access:
         "Common argument traps",
         """# Common argument traps
 
+## PLECS process crashes
+
+A few models make PLECS 5.0.6 segfault **inside its own model compiler**: the JSON-RPC
+connection drops mid-call with no error payload. `plecs.simulate`, `plecs.analyze` and
+`plecs.get(model, "Topology")` are the calls that can hit it; `plecs.load`, `plecs_get` on
+parameters and official demos keep working, so the model - not the transport - is the trigger.
+
+When MCP sees the connection drop during one of those calls it:
+
+1. reports `[plecs-crash]` with the model path and the newest Crashpad `*.dmp` path;
+2. restarts PLECS once (unless `PLECS_MCP_AUTO_START=never`);
+3. quarantines that exact file version (path + mtime + size).
+
+Further `plecs_simulate` / `plecs_analyze` / `plecs_state_space` calls on the unchanged file are
+refused instead of killing PLECS again. Editing the file releases the quarantine.
+
+When you hit this: go back to a copy that compiled, reintroduce the edits in small steps and run
+`plecs_validate` after each one. `CONN-012` catches `From` blocks whose tag has no `Goto`
+anywhere in the readable text, which is one of the mistakes PLECS reports as
+"No matching Goto block found for tag ...".
+
 ## plecs_webserver
 
 - `getScopeCsv` / `getScopeBitmap` / `getScopeSignals` / `getScopeInfo` / `getTraceNames`:

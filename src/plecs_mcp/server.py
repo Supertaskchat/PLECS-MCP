@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,7 @@ from .codec import (
     write_bytes,
 )
 from .paths import PathNotAllowed, check_writable, output_dir, unique_output_path
-from .session import STATE
+from .session import STATE, CrashRecord
 from .summary import classify_analysis, signal_channels, summarize_result
 from . import artifacts as artifacts_mod
 from . import checks as checks_mod
@@ -57,6 +58,7 @@ from . import data as data_mod
 from . import library as library_mod
 from . import library_text as library_text_mod
 from . import modelops
+from . import crashguard
 from . import layout as layout_mod
 from .model_graph import validate_model_file
 from . import plecsfile
@@ -97,13 +99,88 @@ for _key, (_title, _body) in DOCS.items():
     )(_doc_resource(_body))
 
 
+def _try_restart_plecs() -> bool:
+    """Restart PLECS once after a crash, unless the operator disabled it."""
+    if os.getenv("PLECS_MCP_AUTO_START", "always").strip().lower() in {"never", "0", "false", "off"}:
+        return False
+    try:
+        result = plecs_connect(auto_start=True, startup_timeout=60)
+    except Exception:  # noqa: BLE001 - best effort recovery
+        return False
+    return bool(isinstance(result, dict) and result.get("ok"))
+
+
+def _handle_disconnect(method: str, params: list[Any] | None, message: str) -> str:
+    """Quarantine the model and explain a PLECS-side crash. Returns extra text."""
+    if not crashguard.is_disconnect(message) or not crashguard.is_compile_call(method, params):
+        return ""
+    model = str((params or [""])[0] or "")
+    path = STATE.path_for(model) or (model if model.lower().endswith(".plecs") else None)
+    if not path:
+        return ""
+    fingerprint = crashguard.fingerprint(path)
+    if not fingerprint:
+        return ""
+    dump = crashguard.latest_dump(180.0)
+    STATE.record_crash(
+        CrashRecord(
+            model=model,
+            path=path,
+            fingerprint=fingerprint,
+            method=method,
+            dump=dump,
+            at=time.time(),
+        )
+    )
+    restarted = _try_restart_plecs()
+    lines = [
+        "",
+        "",
+        f"[plecs-crash] PLECS terminated without responding during {method} on {path}.",
+        "This is a crash inside PLECS while it compiles the model, not an MCP error:",
+        "parameter reads and other models keep working, and bundled demos compile normally.",
+    ]
+    if dump:
+        lines.append(f"Dump: {dump}")
+    lines.append(
+        f"This file version is quarantined; further {method} calls on it are refused "
+        "until the file changes (edit it, or load a different copy)."
+    )
+    lines.append(
+        "Next: go back to a copy that compiled and reintroduce the edits in small steps, "
+        "running plecs_validate after each one."
+    )
+    lines.append(
+        "MCP restarted PLECS, so the endpoint is available again."
+        if restarted
+        else "Automatic restart is disabled (PLECS_MCP_AUTO_START=never): call plecs_connect when ready."
+    )
+    return "\n".join(lines)
+
+
+def _guard_quarantine(model_name: str, action: str) -> None:
+    """Refuse to re-run a call that already killed PLECS for this exact file."""
+    path = STATE.path_for(model_name)
+    record = STATE.crash_for(crashguard.fingerprint(path))
+    if record is None:
+        return
+    dump = f" (dump: {record.dump})" if record.dump else ""
+    raise ToolError(
+        f"{action} refused: PLECS crashed while compiling {record.path} during "
+        f"{record.method}{dump}. The file is unchanged since that crash, so repeating the "
+        "call would kill PLECS again. Fix the model (compare against a version that "
+        "compiled, or revert the last edits and re-apply them one at a time), then retry."
+    )
+
+
 def _raw(method: str, params: list[Any] | None = None, timeout: float | None = None) -> Any:
     try:
         return get_client().call(method, params, timeout=timeout)
     except PlecsRpcError as exc:
         raise ToolError(with_hint(str(exc))) from exc
     except (PlecsUnreachable, PlecsError, PlecsPayloadError) as exc:
-        raise ToolError(with_hint(str(exc))) from exc
+        message = str(exc)
+        raise ToolError(with_hint(message) + _handle_disconnect(method, params, message)) from exc
 
 
 def _wrap(value: Any) -> dict[str, Any]:
@@ -524,6 +601,7 @@ def plecs_state_space(
     component name ("FET") or full path ("model/FET"). Missing keys default to 0.
     Two RPC calls are made for you: ``set SwitchVector`` then ``get Topology``.
     """
+    _guard_quarantine(model_name, "plecs_state_space")
     order = _raw("plecs.get", [model_name, "StateSpaceOrder"])
     names = order.get("Switches", []) if isinstance(order, dict) else []
     if not isinstance(names, list) or not names:
@@ -576,6 +654,7 @@ def plecs_simulate(
     returned as a summary. ``SolverOpts.Timeout`` is injected (default 600 s) so PLECS
     aborts on its own even if the client gives up.
     """
+    _guard_quarantine(model_name, "plecs_simulate")
     opts = _inject_timeout(options, timeout)
     payload = _maybe_save(_raw("plecs.simulate", [model_name, opts], timeout=timeout), save_to, overwrite)
     payload = _auto_limit(payload, f"{model_name}-simulation", summary, max_points)
@@ -601,6 +680,7 @@ def plecs_analyze(
     magnitude/phase ranges plus gain crossover and phase margin.
     ``SolverOpts.Timeout`` is injected (verified: ``AnalysisOpts.Timeout`` is rejected).
     """
+    _guard_quarantine(model_name, "plecs_analyze")
     opts = _inject_timeout(options, timeout)
     payload = _maybe_save(
         _raw("plecs.analyze", [model_name, analysis_name, opts], timeout=timeout), save_to, overwrite

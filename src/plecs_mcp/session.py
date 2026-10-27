@@ -13,8 +13,31 @@ class ModelState:
 
 
 @dataclass
+class CrashRecord:
+    """One PLECS process death, keyed by the model file that triggered it."""
+
+    model: str
+    path: str
+    fingerprint: str
+    method: str
+    dump: str | None
+    at: float
+
+
+@dataclass
 class SessionState:
     models: dict[str, ModelState] = field(default_factory=dict)
+    crashes: dict[str, CrashRecord] = field(default_factory=dict)
+
+    def record_crash(self, record: CrashRecord) -> None:
+        self.crashes[record.fingerprint] = record
+
+    def crash_for(self, fingerprint: str | None) -> CrashRecord | None:
+        return self.crashes.get(fingerprint) if fingerprint else None
+
+    def clear_crash(self, fingerprint: str | None) -> None:
+        if fingerprint:
+            self.crashes.pop(fingerprint, None)
 
     def loaded(self, name: str, path: str) -> ModelState:
         state = ModelState(name=name, path=path)

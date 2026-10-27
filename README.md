@@ -321,6 +321,11 @@ and a second `simulate` still waits for the first. The client mirrors that:
 - `plecs_validate` graph checks are static: they cover component references, subsystem ports,
   C-Script port/code indices and top-level Output indices. Built-in component terminal counts are
   not available in `.plecs`, so PLECS Diagnostics remains authoritative for those cases.
+- PLECS can segfault **inside its own compiler** for some models; that is not an MCP error. If
+  the connection drops during `plecs.simulate` / `plecs.analyze` / `plecs.get(model, "Topology")`,
+  MCP reports `[plecs-crash]` with the Crashpad dump path, restarts PLECS once and quarantines
+  that file version, so retrying the identical call is refused instead of crashing again. Edit
+  the model (or load a copy that compiled) to release it.
 - `plecs_layout_check` uses the bounding box per component that `getCircuitBitmap` returns, plus
   `Position`/`Points` from the text. It reports `LAYOUT-001` (error: two component boxes
   intersect), `LAYOUT-002` (warning: diagonal wire segment) and `LAYOUT-003` (info: a wire drawn
@@ -415,10 +420,10 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 153 tests
+.venv/bin/python -m pytest -q      # 160 tests
 ```
 
-Current release: **0.4.0** — see [CHANGELOG.md](CHANGELOG.md).
+Current release: **0.4.1** — see [CHANGELOG.md](CHANGELOG.md).
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
   plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,

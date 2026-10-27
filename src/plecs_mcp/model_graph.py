@@ -821,6 +821,8 @@ def validate_graph(graph: ModelGraph, include_code: bool = True) -> list[Diagnos
         for component in graph.root.components.values()
         if component.type in OUTPUT_TYPES
     ]
+    _check_goto_from(graph, diagnostics, seen)
+
     # Library definition files and RT Box data-logging models declare bare
     # outport terminals without Output blocks; only cross-check when the model
     # actually routes signals to top-level Output components.
@@ -900,6 +902,39 @@ def validate_graph(graph: ModelGraph, include_code: bool = True) -> list[Diagnos
                 fix="Add the matching Output component or remove the terminal.",
             )
     return diagnostics
+
+
+def _check_goto_from(
+    graph: ModelGraph,
+    diagnostics: list[Diagnostic],
+    seen: set[tuple[str, str, str, int | None]],
+) -> None:
+    """Signal routing tags are model-wide; a From without any Goto cannot resolve."""
+    gotos: set[str] = set()
+    froms: list[tuple[str, str, int]] = []
+    for schematic in graph.schematics:
+        for component in schematic.components.values():
+            tag = (component.params.get("Tag") or "").strip().strip('"')
+            if not tag:
+                continue
+            if component.type == "Goto":
+                gotos.add(tag)
+            elif component.type == "From":
+                froms.append((component.name, tag, component.line))
+    for name, tag, line in froms:
+        if tag in gotos:
+            continue
+        _add(
+            diagnostics,
+            seen,
+            "CONN-012",
+            "warning",
+            f"From block {name!r} reads tag {tag!r}, but no Goto declares it in the readable "
+            f"text (a masked or encrypted subsystem may supply it)",
+            component=name,
+            line=line,
+            fix="Add the matching Goto, fix the tag spelling, or ignore if a masked block provides it.",
+        )
 
 
 def validate_model_text(

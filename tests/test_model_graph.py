@@ -381,3 +381,39 @@ def test_scalar_zero_port_count_means_no_ports():
     calc = graph.find_component("Calc")
     assert calc.input_widths == []
     assert calc.output_widths == [5]
+
+
+def test_from_without_goto_is_a_warning():
+    body = '''    Component {
+      Type          From
+      Name          "F1"
+      Parameter {
+        Variable      "Tag"
+        Value         "IslandCmd"
+      }
+    }
+'''
+    diagnostics = _diag(_model(body + _output()))
+    assert "CONN-012" in _codes(diagnostics)
+    assert all(item.severity == "warning" for item in diagnostics if item.code == "CONN-012")
+
+
+def test_from_with_matching_goto_is_clean():
+    body = '''    Component {
+      Type          Goto
+      Name          "G1"
+      Parameter {
+        Variable      "Tag"
+        Value         "IslandCmd"
+      }
+    }
+    Component {
+      Type          From
+      Name          "F1"
+      Parameter {
+        Variable      "Tag"
+        Value         "IslandCmd"
+      }
+    }
+'''
+    assert "CONN-012" not in _codes(_diag(_model(body + _output())))

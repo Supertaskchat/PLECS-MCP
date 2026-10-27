@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.1] - 2026-10-27
+
+### Added
+
+- Crash guard for PLECS segfaults during model compilation. When the RPC connection drops
+  inside `plecs.simulate` / `plecs.analyze` / `plecs.get(model, "Topology")`, MCP now reports
+  `[plecs-crash]` with the newest Crashpad dump path, restarts PLECS once, and quarantines that
+  exact file version (path + mtime + size) so the next identical call is refused instead of
+  crashing PLECS again. Editing the file releases the quarantine.
+- `CONN-012` (warning): a `From` block whose tag has no `Goto` anywhere in the readable text,
+  which is exactly what PLECS reports as "No matching Goto block found for tag ...".
+
+### Verified
+
+- `ess_125kw_261kwh.before_refine.plecs` reproduces PLECS' four missing-Goto errors as four
+  `CONN-012` warnings, while the 239 bundled files stay at zero errors (8 thermal warnings only).
+- The crash is reproducible over raw JSON-RPC without the MCP server, and bundled demos compile
+  normally, so the trigger is the model rather than the MCP payload.
+- End to end: a crashing model now yields one `[plecs-crash]` error with a dump path, PLECS is
+  restarted, and the second call is refused while PLECS stays alive.
+
 ## [0.4.0] - 2026-10-27
 
 ### Added
