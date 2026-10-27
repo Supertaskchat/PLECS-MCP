@@ -150,6 +150,25 @@ def summarize_frequency(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+ANALYSIS_KINDS = (
+    ("steady", "steady-state"),
+    ("ac sweep", "ac-sweep"),
+    ("impulse", "impulse-response"),
+    ("multitone", "multitone"),
+    ("frequency response", "frequency-response"),
+)
+
+
+def classify_analysis(name: str | None) -> str | None:
+    if not name:
+        return None
+    lowered = name.lower()
+    for needle, kind in ANALYSIS_KINDS:
+        if needle in lowered:
+            return kind
+    return None
+
+
 def summarize_result(result: Any) -> Any:
     """Pick the right summary for a PLECS simulate/analyze payload."""
     if isinstance(result, list):

@@ -100,10 +100,101 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def write_bytes(path: str, data: bytes, overwrite: bool = False) -> dict[str, Any]:
-    target = Path(path).expanduser().resolve()
-    if target.exists() and not overwrite:
-        raise PlecsPayloadError(f"refusing to overwrite existing file: {target}")
+def write_bytes(path: str | Path, data: bytes, overwrite: bool = False) -> dict[str, Any]:
+    from .paths import PathNotAllowed, check_writable
+
+    try:
+        target = check_writable(path, overwrite=overwrite)
+    except PathNotAllowed as exc:
+        raise PlecsPayloadError(str(exc)) from exc
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)
     return {"path": str(target), "bytes": len(data), "sha256": sha256_bytes(data)}
+
+
+def outports_from_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
+    """Top-level Signal Outport components (PLECS does not expose a port index)."""
+    found: list[dict[str, Any]] = []
+
+    def walk(node: dict[str, Any]) -> None:
+        if _property(node, "Library type") == "Signal Outport":
+            found.append({"name": _property(node, "Name"), "position": _property(node, "Position")})
+        for child in _children(node):
+            walk(child)
+
+    walk(tree)
+    return found
+
+
+def parse_merged_items(lines: Any) -> list[dict[str, Any]]:
+    """Turn ``plecs.compare`` output into structured entries.
+
+    PLECS returns ONE string that already contains newlines, and component names may
+    themselves contain newlines ("PID\nController"). Entries are therefore split on a
+    newline that is followed by indentation + ``MergedItem(``, not on every newline.
+    """
+    import re
+
+    if isinstance(lines, str):
+        text = lines
+    elif isinstance(lines, list):
+        text = "\n".join(line for line in lines if isinstance(line, str))
+    else:
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for part in re.split(r"\n(?=[ \t]*MergedItem\()", text):
+        if not part.strip():
+            continue
+        indent = len(part) - len(part.lstrip(" \t"))
+        body = part.strip()
+        close = body.rfind(")")
+        if not body.startswith("MergedItem(") or close < 0:
+            continue
+        fields = body[len("MergedItem(") : close].rsplit(", ", 3)
+        if len(fields) != 4:
+            continue
+        left, right, change, kind = fields
+        entries.append(
+            {
+                "depth": indent // 2,
+                "left": left,
+                "right": right,
+                "change": change,
+                "type": kind,
+            }
+        )
+    return entries
+
+
+def slice_csv(
+    text: str,
+    time_range: list[float] | tuple[float, float] | None = None,
+    decimate: int | None = None,
+) -> tuple[list[str], list[list[str]]]:
+    """Apply a time window and decimation to a PLECS scope CSV (client-side only)."""
+    import csv
+    import io
+
+    reader = csv.reader(io.StringIO(text))
+    rows = [row for row in reader if row]
+    if not rows:
+        return [], []
+    header, body = rows[0], rows[1:]
+
+    if time_range:
+        low, high = float(time_range[0]), float(time_range[1])
+        filtered: list[list[str]] = []
+        for row in body:
+            try:
+                t = float(row[0])
+            except (ValueError, IndexError):
+                continue
+            if low <= t <= high:
+                filtered.append(row)
+        body = filtered
+
+    if decimate and decimate > 1:
+        body = [row for index, row in enumerate(body) if index % decimate == 0]
+
+    return header, body

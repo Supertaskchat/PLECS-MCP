@@ -22,6 +22,8 @@ EXPECTED = {
     "plecs_export_fmu",
     "plecs_run_script",
     "plecs_compare",
+    "plecs_batch",
+    "plecs_state_space",
     "plecs_extract_execution_log_data",
     "plecs_set_cosim_server_enabled",
     "plecs_sign",
@@ -100,8 +102,12 @@ async def test_connect_starts_plecs_when_unreachable(monkeypatch):
         def close(self):
             pass
 
+        def methods(self):
+            return {"plecs.statistics", "plecs.save"}
+
     saved = client_module._client
     monkeypatch.setattr("plecs_mcp.server.PlecsClient", _FlakyClient)
+    monkeypatch.setattr("plecs_mcp.server.plecs_running", lambda: False)
     monkeypatch.setattr("plecs_mcp.server.find_plecs_app", lambda *_a, **_k: __import__("pathlib").Path("/Applications/PLECS 5.0.app"))
     monkeypatch.setattr("plecs_mcp.server.launch_plecs", lambda app: {"ok": True, "app": str(app), "error": None})
     monkeypatch.setattr("plecs_mcp.server.wait_for_port", lambda *_a, **_k: 1.5)
@@ -134,6 +140,7 @@ async def test_connect_reports_missing_bundle(monkeypatch):
 
     saved = client_module._client
     monkeypatch.setattr("plecs_mcp.server.PlecsClient", _StubClient)
+    monkeypatch.setattr("plecs_mcp.server.plecs_running", lambda: False)
     monkeypatch.setattr("plecs_mcp.server.find_plecs_app", lambda *_a, **_k: None)
     try:
         async with Client(mcp) as client:

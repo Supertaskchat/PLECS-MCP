@@ -2,12 +2,46 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from typing import Any
 
 import httpx
 
+from contextlib import contextmanager
+
 from .config import load_config
+from .locks import ReadWriteLock
+
+logger = logging.getLogger("plecs_mcp.rpc")
+
+# Long-running commands: PLECS accepts only one at a time, but read-only calls are fine
+# while they run (measured), so they hold a *read* slot instead of an exclusive one.
+BLOCKING_METHODS = frozenset(
+    {
+        "plecs.simulate",
+        "plecs.analyze",
+        "plecs.codegen",
+        "plecs.exportfmu",
+        "plecs.runScript",
+    }
+)
+
+# Fast state mutations: these must not overlap a running simulation or another mutation.
+WRITE_METHODS = frozenset(
+    {
+        "plecs.load",
+        "plecs.close",
+        "plecs.save",
+        "plecs.set",
+        "plecs.scope",
+        "plecs.protect",
+        "plecs.sign",
+        "plecs.crash",
+        "plecs.setCoSimServerEnabled",
+    }
+)
 
 
 class PlecsError(RuntimeError):
@@ -51,8 +85,11 @@ class PlecsClient:
         self._url = f"http://{self.host}:{self.port}/"
         # PLECS only ever listens on localhost: never route through system/env proxies.
         self._http = httpx.Client(base_url=self._url, trust_env=False)
-        self._lock = threading.Lock()
+        self._rwlock = ReadWriteLock()
+        self._blocking = threading.Lock()
+        self._id_lock = threading.Lock()
         self._id = 0
+        self._methods: set[str] | None = None
 
     def _timeout(self, seconds: float | None) -> httpx.Timeout:
         read = self.timeout if seconds is None else float(seconds)
@@ -60,21 +97,31 @@ class PlecsClient:
 
     def call(self, method: str, params: list[Any] | None = None, timeout: float | None = None) -> Any:
         """Invoke one RPC method and return its ``result`` field."""
-        with self._lock:
-            self._id += 1
+        with self._guard(method):
+            with self._id_lock:
+                self._id += 1
+                request_id = self._id
             payload = {
                 "jsonrpc": "2.0",
                 "method": method,
                 "params": params or [],
-                "id": self._id,
+                "id": request_id,
             }
+            started = time.perf_counter()
             try:
                 response = self._http.post("", json=payload, timeout=self._timeout(timeout))
             except httpx.HTTPError as exc:
+                logger.warning("%s failed after %.2fs: %s", method, time.perf_counter() - started, exc)
                 raise PlecsUnreachable(
                     f"cannot reach PLECS at {self._url}: {exc}. "
                     "Is PLECS running with the RPC interface enabled (Preferences > RPC)?"
                 ) from exc
+            logger.debug(
+                "%s ok in %.3fs, %d bytes",
+                method,
+                time.perf_counter() - started,
+                len(response.content),
+            )
 
         if response.status_code != 200:
             raise PlecsError(f"{method} failed: HTTP {response.status_code}: {response.text[:500]}")
@@ -86,8 +133,34 @@ class PlecsClient:
 
         error = body.get("error")
         if error:
+            logger.warning("%s returned %s: %s", method, error.get("code"), error.get("message"))
             raise PlecsRpcError(method, int(error.get("code", 0)), str(error.get("message", "")))
         return body.get("result")
+
+    @contextmanager
+    def _guard(self, method: str):
+        if method in BLOCKING_METHODS:
+            with self._blocking:
+                with self._rwlock.read():
+                    yield
+        elif method in WRITE_METHODS:
+            with self._rwlock.write():
+                yield
+        else:
+            with self._rwlock.read():
+                yield
+
+    def methods(self) -> set[str]:
+        """Cached ``system.listMethods`` used for capability gating."""
+        if self._methods is None:
+            self._methods = set(self.call("system.listMethods"))
+        return self._methods
+
+    def supports(self, method: str) -> bool:
+        try:
+            return method in self.methods()
+        except PlecsError:
+            return False
 
     def close(self) -> None:
         self._http.close()
