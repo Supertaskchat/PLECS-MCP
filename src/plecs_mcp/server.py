@@ -71,7 +71,9 @@ mcp = FastMCP(
         "Controls Plexim PLECS Standalone through its JSON-RPC server. "
         "PLECS must be running with the RPC interface enabled (Preferences > RPC, default port 1080). "
         "Every tool maps 1:1 to a PLECS RPC method; call plecs_list_methods to discover what this "
-        "PLECS build actually supports. Blocking calls (simulate/analyze) are serialized."
+        "PLECS build actually supports. Blocking calls (simulate/analyze) are serialized. "
+        "Before using plecs_webserver, plecs_scope or plecs_run_script, read plecs://docs/gotchas "
+        "for exact argument shapes and common traps."
     ),
 )
 
@@ -609,13 +611,62 @@ def plecs_analyze(
 def plecs_scope(scope_path: str, command: str, argument: Any = None) -> dict[str, Any]:
     """Send a command to a scope (HoldTrace / RemoveTrace / ClearTraces / SaveTraces / LoadTraces).
 
+    Argument shapes:
+      HoldTrace:    [scope, "HoldTrace", "trace name"]
+      RemoveTrace:  [scope, "RemoveTrace", "trace name"]  (name is required)
+      ClearTraces:  [scope, "ClearTraces"]
+      SaveTraces:   [scope, "SaveTraces", "/path/file.trace"]
+      LoadTraces:   [scope, "LoadTraces", "/path/existing.trace"]
+
     ``scope_path`` is like "model/Scope". RPC does NOT support ExportCSV/GetCursorData;
-    use plecs_webserver with getScopeCsv/getCursorData instead.
+    use plecs_webserver with getScopeCsv/getCursorData instead. ``SaveTraces`` requires
+    simulation data in the scope: a scope that has never simulated writes a tiny .trace
+    file that ``LoadTraces`` rejects with "ended prematurely". Run a simulation first.
     """
+    if isinstance(argument, Path):
+        argument = str(argument)
+
+    if command == "RemoveTrace" and (argument is None or str(argument).strip() == ""):
+        raise ToolError(
+            'RemoveTrace requires a trace name; call plecs_webserver("getTraceNames", [scope]) '
+            "to list them."
+        )
+
+    if command == "LoadTraces":
+        if not isinstance(argument, (str, Path)) or not str(argument):
+            raise ToolError(
+                'LoadTraces requires a path, e.g. ["model/Scope", "LoadTraces", "/tmp/scope.trace"].'
+            )
+        target = Path(argument).expanduser()
+        if not target.is_file() or target.stat().st_size == 0:
+            raise ToolError(
+                "LoadTraces needs a non-empty .trace file written by SaveTraces; "
+                f"got {str(target)!r}."
+            )
+
+    lost: list[dict[str, Any]] = []
+    if command == "SaveTraces":
+        if not isinstance(argument, (str, Path)) or not str(argument):
+            raise ToolError(
+                'SaveTraces requires a target path, e.g. ["model/Scope", "SaveTraces", "/tmp/scope.trace"].'
+            )
+        try:
+            signals, lost = _scope_call("getScopeSignals", [scope_path])
+        except ToolError:
+            signals, lost = None, []
+        if isinstance(signals, list) and not any(
+            isinstance(item, dict) and item.get("signal") for item in signals
+        ):
+            raise ToolError(
+                "scope has no simulation data to save; run a simulation first. "
+                "Saving now would create a .trace file that LoadTraces rejects."
+            )
+
     params: list[Any] = [scope_path, command]
     if argument is not None:
         params.append(argument)
-    return _call("plecs.scope", params)
+    result = _call("plecs.scope", params)
+    return _with_closed_models(result, lost)
 
 
 def _externalize_images(
@@ -711,6 +762,13 @@ def _scope_snapshot() -> dict[str, dict[str, Any]]:
     }
 
 
+def _lost_models(before: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    if not before:
+        return []
+    after = _scope_snapshot()
+    return [info for model_id, info in before.items() if model_id not in after]
+
+
 def _scope_call(command: str, arguments: list[Any]) -> tuple[Any, list[dict[str, Any]]]:
     """Run a webserver scope command and report other models PLECS silently closed.
 
@@ -720,10 +778,7 @@ def _scope_call(command: str, arguments: list[Any]) -> tuple[Any, list[dict[str,
     watched = command.startswith(("getScope", "getCircuit", "getCursor"))
     before = _scope_snapshot() if watched else {}
     result = _raw("plecs.webserver", [command, *arguments])
-    if not before:
-        return result, []
-    after = _scope_snapshot()
-    lost = [info for model_id, info in before.items() if model_id not in after]
+    lost = _lost_models(before)
     if lost:
         logger.warning(
             "PLECS closed %d other model(s) during plecs.webserver %s: %s",
@@ -759,6 +814,8 @@ def plecs_webserver(
 
     Commands: getScopeInfo, getTraceNames, getScopeSignals, getScopeCsv, getCursorData,
     getScopeBitmap, getCircuitBitmap. Pass the command's own arguments in ``arguments``.
+    ``getScope*`` take a scope path; ``getCircuitBitmap`` takes the **model name**;
+    ``getCursorData`` also accepts ``[scope, {"Index": 0}]`` (a bare integer is rejected).
 
     ``getScopeCsv`` is base64 CSV; PLECS ignores its own range/size options, so
     ``time_range=[t0,t1]`` and ``decimate=N`` are applied here. CSVs above ``max_rows``
@@ -767,7 +824,27 @@ def plecs_webserver(
     written to ``save_to`` (or auto-saved under ``PLECS_MCP_OUTPUT_DIR``) and replaced
     by ``saved`` metadata; image bytes are never returned inline.
     """
-    result, lost = _scope_call(command, arguments or [])
+    args = list(arguments or [])
+    if (
+        command == "getCursorData"
+        and len(args) >= 2
+        and isinstance(args[1], (int, float))
+        and not isinstance(args[1], bool)
+    ):
+        raise ToolError(
+            'getCursorData expects [scope] or [scope, {"Index": 0}]; a bare integer is invalid.'
+        )
+    if command == "getCircuitBitmap":
+        target = args[0] if args else None
+        text_target = str(target) if target is not None else ""
+        if target is not None and (
+            text_target.lower().endswith(".plecs") or "/" in text_target or "\\" in text_target
+        ):
+            raise ToolError(
+                "getCircuitBitmap expects a model name (e.g. \"buck_converter\"), "
+                f"not a .plecs file path; got {text_target!r}."
+            )
+    result, lost = _scope_call(command, args)
 
     if isinstance(result, dict) and isinstance(result.get("csv"), str):
         try:
@@ -796,7 +873,7 @@ def plecs_webserver(
                     lost,
                 )
             if len(rows) > limit:
-                target = unique_output_path(output_dir(), f"{command}-{arguments[0] if arguments else 'scope'}", ".csv")
+                target = unique_output_path(output_dir(), f"{command}-{args[0] if args else 'scope'}", ".csv")
                 target.write_text(rendered, encoding="utf-8")
                 return _with_closed_models(
                     {
@@ -817,7 +894,7 @@ def plecs_webserver(
             result,
             save_to=save_to,
             overwrite=overwrite,
-            stem=f"{command}-{arguments[0] if arguments else 'scope'}",
+            stem=f"{command}-{args[0] if args else 'scope'}",
         )
     except PlecsPayloadError as exc:
         raise ToolError(str(exc)) from exc
@@ -867,13 +944,63 @@ def plecs_export_fmu(subsystem_path: str) -> dict[str, Any]:
 def plecs_run_script(model_name: str, script_name: str, params: list[Any] | None = None) -> dict[str, Any]:
     """Run a model Simulation Script by name.
 
-    Verified on PLECS 5.0.6: the method is listed by ``system.listMethods`` but every
-    positional/dict shape tried returns ``server error: invalid method parameters``.
-    The tool therefore passes ``[model_name, script_name]`` by default and lets you
-    override the wire payload with ``params`` once the shape is known for your build.
+    Verified on PLECS 5.0.6: the second argument is an **optStruct**, not a bare
+    string — ``plecs.runScript(model, {"ScriptName": name})``. A successful run
+    returns ``null``; the script's printed output goes to the PLECS console/Octave
+    log and is not captured by RPC. Use ``params`` only for a raw override.
+
+    ``script_name`` must exactly match a ``Script { Name "..." }`` block in the
+    ``.plecs`` file. The RPC model tree does not expose script names; use
+    ``plecs_overview(model).scripts`` or read the file. A wrong name lists the
+    available scripts in the error.
     """
     _require("plecs.runScript")
-    return _call("plecs.runScript", params if params is not None else [model_name, script_name], timeout=600)
+    if not script_name.strip():
+        raise ToolError(
+            "script_name is required; read a Script { Name \"...\" } block in the .plecs "
+            "file or call plecs_overview to list scripts."
+        )
+    before = _scope_snapshot()
+    if params is not None:
+        return _call("plecs.runScript", params, timeout=600)
+    try:
+        result = _call("plecs.runScript", [model_name, {"ScriptName": script_name}], timeout=600)
+    except ToolError as exc:
+        message = str(exc)
+        if "could not find script with name" in message.lower():
+            model_path = STATE.path_for(model_name)
+            if not model_path:
+                try:
+                    stats = _raw("plecs.statistics") or {}
+                    record = next(
+                        (item for item in stats.get("models", []) if item.get("id") == model_name),
+                        {},
+                    )
+                    model_path = record.get("filename")
+                except ToolError:
+                    model_path = None
+            available = plecsfile.script_names(model_path or model_name)
+            if available:
+                raise ToolError(
+                    f"{message}\nAvailable scripts: "
+                    + ", ".join(repr(name) for name in available)
+                    + ". Pass one of these exactly as script_name; the RPC model tree does not expose scripts."
+                ) from exc
+        raise
+    lost = _lost_models(before)
+    if lost:
+        logger.warning(
+            "PLECS closed %d other model(s) during plecs.runScript %s: %s",
+            len(lost),
+            script_name,
+            ", ".join(str(info.get("id")) for info in lost),
+        )
+    payload = {
+        **result,
+        "script_name": script_name,
+        "note": "script output is written to the PLECS console; the RPC result is null",
+    }
+    return _with_closed_models(payload, lost)
 
 
 # ---------------------------------------------------------------- misc
@@ -1007,6 +1134,7 @@ def plecs_overview(model_name: str) -> dict[str, Any]:
         "scopes": summary["scopes"],
         "subsystems": [item["path"] for item in summary["subsystems"]],
         "outports": outports_from_tree(tree),
+        "scripts": plecsfile.script_names(path),
     }
 
 
@@ -1065,6 +1193,7 @@ def plecs_validate(model_name: str) -> dict[str, Any]:
             "outports": len(outports),
             "analyses": names,
             "scopes": summary["scopes"],
+            "scripts": plecsfile.script_names(path),
         },
     }
 
@@ -1217,7 +1346,8 @@ def plecs_submit(method: str, params: list[Any] | None = None, timeout: float | 
     """Start a long blocking call in the background and return a task id.
 
     Allowed methods: simulate, analyze, codegen, exportfmu, runScript.
-    PLECS has no cancel API; use ``SolverOpts.Timeout`` to bound the run.
+    For ``runScript`` pass ``[model, {"ScriptName": name}]``. PLECS has no cancel API;
+    use ``SolverOpts.Timeout`` to bound the run.
     """
     if method not in BLOCKING_METHODS:
         raise ToolError(f"{method} is not a blocking method; allowed: {', '.join(sorted(BLOCKING_METHODS))}")

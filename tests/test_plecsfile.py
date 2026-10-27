@@ -99,6 +99,26 @@ def test_add_outport_adds_terminal_and_component():
     assert 'Index         "2"' in updated
 
 
+def test_script_names_extracts_names(tmp_path):
+    path = tmp_path / "m.plecs"
+    path.write_text(
+        """Plecs {
+  Script {
+    Name          "First"
+    Script        "x"
+  }
+  Script {
+    Name          "Second"
+    Script        "y"
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    assert plecsfile.script_names(path) == ["First", "Second"]
+    assert plecsfile.script_names(tmp_path / "missing.plecs") == []
+
+
 def test_library_templates_extracts_types():
     lib = TEMPLATE + '\nComponent {\n  Type          Inductor\n  Name          "L"\n}\n'
     templates = plecsfile.library_templates(lib)

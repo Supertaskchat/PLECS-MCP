@@ -178,6 +178,13 @@ async def test_docs_resources_are_served():
         resources = await client.list_resources()
         uris = {str(item.uri) for item in resources}
         assert "plecs://docs/rpc" in uris
+        assert "plecs://docs/gotchas" in uris
         content = await client.read_resource("plecs://docs/rpc")
+        gotchas = await client.read_resource("plecs://docs/gotchas")
     text = content[0].text if hasattr(content[0], "text") else str(content[0])
+    trap_text = gotchas[0].text if hasattr(gotchas[0], "text") else str(gotchas[0])
     assert "plecs.simulate" in text
+    assert "getCursorData" in trap_text
+    assert "getCircuitBitmap" in trap_text
+    assert "SaveTraces" in trap_text
+    assert "ScriptName" in trap_text

@@ -58,19 +58,64 @@ RULES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         ("Read the Name properties from plecs_get_model_tree(model_path, summary=True).",),
     ),
     (
+        "invalid scope path",
+        "scope-path",
+        "The scope path does not exist in the open model.",
+        (
+            "Read the exact scope paths from plecs_overview(model)['scopes'] or getModelTree summary.",
+            "Scope paths look like 'model/Scope' or 'model/Subsystem/Scope'.",
+        ),
+    ),
+    (
+        "cannot find scope",
+        "scope-path",
+        "The scope path does not exist in the open model.",
+        (
+            "Read the exact scope paths from plecs_overview(model)['scopes'] or getModelTree summary.",
+            "Scope paths look like 'model/Scope' or 'model/Subsystem/Scope'.",
+        ),
+    ),
+    (
         "invalid scope command",
         "scope-command",
         "The scope command is not available over RPC.",
         (
             "Use HoldTrace / RemoveTrace / ClearTraces / SaveTraces / LoadTraces.",
-            "For waveform data use plecs_webserver('getScopeCsv', [scope]).",
+            "ExportCSV/GetCursorData are not scope commands; use plecs_webserver getScopeCsv/getCursorData.",
         ),
     ),
     (
         "invalid webserver command",
         "webserver-command",
         "The webserver command is not available on this build.",
-        ("Use getScopeInfo / getTraceNames / getScopeSignals / getScopeCsv / getCursorData / getScopeBitmap / getCircuitBitmap.",),
+        (
+            "Use getScopeInfo / getTraceNames / getScopeSignals / getScopeCsv / getCursorData / getScopeBitmap / getCircuitBitmap.",
+            "getScope* take [scope]; getCircuitBitmap takes [model_name]; getCursorData takes [scope] or [scope, {\"Index\": 0}].",
+        ),
+    ),
+    (
+        "trace '' not found",
+        "trace-name",
+        "HoldTrace/RemoveTrace needs a non-empty trace name.",
+        ("Call plecs_webserver('getTraceNames', [scope]) to list the available traces.",),
+    ),
+    (
+        "trace file ended prematurely",
+        "trace-file",
+        "The .trace file is incomplete; this usually means SaveTraces ran on a scope with no simulation data.",
+        (
+            "Run a simulation before SaveTraces.",
+            "Pass a non-empty .trace written by SaveTraces to LoadTraces.",
+        ),
+    ),
+    (
+        "could not find script with name",
+        "script-name",
+        "ScriptName is not the exact Name of a Script block in the model file.",
+        (
+            "Read the Script { Name \"...\" } block in the .plecs file, or use plecs_overview(model)['scripts'].",
+            "The RPC model tree does not expose script names.",
+        ),
     ),
     (
         "invalid subsystem path",
@@ -91,6 +136,30 @@ RULES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         (
             "Call plecs_connect (it can start PLECS on this host).",
             "Enable Preferences -> RPC and confirm the port.",
+        ),
+    ),
+    (
+        "invalid path",
+        "path-kind",
+        "The value is not the kind of path this method expects.",
+        (
+            "getCircuitBitmap expects a model name, not a .plecs file path.",
+            "exportfmu expects a subsystem path inside the open model.",
+        ),
+    ),
+    (
+        "named parameters are not supported",
+        "positional-params",
+        "PLECS JSON-RPC accepts positional parameters only.",
+        ("Pass a JSON array of positional params; see plecs://docs/gotchas.",),
+    ),
+    (
+        "invalid method parameters",
+        "parameters",
+        "The positional parameter shape does not match the method.",
+        (
+            "Check the tool docstring or plecs://docs/gotchas.",
+            "For runScript use [model, {\"ScriptName\": name}].",
         ),
     ),
     (

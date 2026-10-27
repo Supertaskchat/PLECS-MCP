@@ -39,7 +39,7 @@ Transport: JSON-RPC 2.0 over HTTP on `127.0.0.1:1080` (localhost only).
 | `plecs.compare(a, b)` | one multi-line string of `MergedItem(...)` entries |
 | `plecs.extractExecutionLogData()` | solver/Jacobian counters for the last run |
 
-`plecs.runScript` is listed but rejects every wire shape on 5.0.6.
+`plecs.runScript(model, {"ScriptName": name})` runs a Simulation Script; success returns null.
 """,
     ),
     "analysis": (
@@ -91,6 +91,37 @@ Gain crossover and phase margin are only meaningful for loop-gain AC sweeps.
 | `cannot reach PLECS` | RPC disabled or PLECS not running | `plecs_connect()` (auto-starts) |
 | `refusing to overwrite` | file exists | pass `overwrite=true` |
 | `outside PLECS_MCP_ALLOWED_ROOTS` | write guard | write under the output dir |
+""",
+    ),
+    "gotchas": (
+        "Common argument traps",
+        """# Common argument traps
+
+## plecs_webserver
+
+- `getScopeCsv` / `getScopeBitmap` / `getScopeSignals` / `getScopeInfo` / `getTraceNames`:
+  `["scope_path"]`
+- `getCursorData`: `["scope_path"]` or `["scope_path", {"Index": 0}]`.
+  A bare integer (`["scope_path", 0]`) is rejected as invalid parameters.
+- `getCircuitBitmap`: `["model_name"]` — **not** a `.plecs` file path.
+- Base64 images are written to `save_to` or `PLECS_MCP_OUTPUT_DIR`; never inline.
+
+## plecs_scope
+
+- `SaveTraces`: `[scope, "SaveTraces", "/path/file.trace"]`.
+  The scope must already contain **simulation data**; a scope that has never simulated
+  writes a tiny `.trace` that `LoadTraces` rejects with "ended prematurely".
+  Run a simulation first (clearing traces after a simulation is fine).
+- `LoadTraces`: `[scope, "LoadTraces", "/path/existing.trace"]`; the file must be non-empty.
+- `RemoveTrace`: requires a trace name. List traces with
+  `plecs_webserver("getTraceNames", [scope])`.
+- `ExportCSV` / `GetCursorData` are not scope commands; use the webserver equivalents.
+
+## plecs_run_script
+
+- `ScriptName` must exactly match a `Script { Name "..." }` block in the `.plecs` file.
+- The RPC model tree does not expose script names. Use `plecs_overview(model)["scripts"]`
+  or read the file; a wrong name returns the available script names in the error.
 """,
     ),
     "limits": (

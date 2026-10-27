@@ -140,6 +140,94 @@ def test_clone_preserves_crlf(tmp_path: Path):
     assert target.read_bytes() == original.encode("utf-8")
 
 
+def test_webserver_rejects_bare_cursor_index():
+    with pytest.raises(ToolError, match="Index"):
+        server.plecs_webserver("getCursorData", ["m/Scope", 0])
+
+
+def test_webserver_rejects_circuit_bitmap_path():
+    with pytest.raises(ToolError, match="model name"):
+        server.plecs_webserver("getCircuitBitmap", ["/tmp/model.plecs"])
+
+
+def test_scope_remove_trace_requires_name():
+    with pytest.raises(ToolError, match="RemoveTrace requires"):
+        server.plecs_scope("m/Scope", "RemoveTrace")
+
+
+def test_scope_load_traces_requires_existing_file(tmp_path: Path):
+    with pytest.raises(ToolError, match="non-empty .trace"):
+        server.plecs_scope("m/Scope", "LoadTraces", str(tmp_path / "missing.trace"))
+
+
+def test_scope_save_traces_requires_simulation_data(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(server, "_scope_call", lambda *args, **kwargs: ([{"signal": []}], []))
+    with pytest.raises(ToolError, match="no simulation data"):
+        server.plecs_scope("m/Scope", "SaveTraces", str(tmp_path / "empty.trace"))
+
+
+def test_scope_save_traces_with_data_passes(monkeypatch, tmp_path: Path):
+    calls = []
+    monkeypatch.setattr(server, "_scope_call", lambda *args, **kwargs: ([{"signal": [1]}], []))
+    monkeypatch.setattr(
+        server, "_call", lambda method, params=None, timeout=None: calls.append((method, params)) or {"result": 0}
+    )
+    target = str(tmp_path / "ok.trace")
+    result = server.plecs_scope("m/Scope", "SaveTraces", target)
+    assert result == {"result": 0}
+    assert calls == [("plecs.scope", ["m/Scope", "SaveTraces", target])]
+
+
+def test_run_script_lists_available_scripts(monkeypatch, tmp_path: Path):
+    model = tmp_path / "script_model.plecs"
+    model.write_text(
+        """Plecs {
+  Script {
+    Name          "First"
+    Script        "x"
+  }
+  Script {
+    Name          "Second"
+    Script        "y"
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    server.STATE.loaded("script_model", str(model))
+    monkeypatch.setattr(server, "_require", lambda method: None)
+    monkeypatch.setattr(server, "_scope_snapshot", lambda: {})
+
+    def fail(*args, **kwargs):
+        raise ToolError("plecs.runScript failed [-32500]: Could not find script with name Nope.")
+
+    monkeypatch.setattr(server, "_call", fail)
+    try:
+        with pytest.raises(ToolError) as excinfo:
+            server.plecs_run_script("script_model", "Nope")
+    finally:
+        server.STATE.closed("script_model")
+    message = str(excinfo.value)
+    assert "Available scripts" in message
+    assert "First" in message and "Second" in message
+    assert "does not expose scripts" in message
+
+
+def test_run_script_uses_scriptname_optstruct(monkeypatch):
+    calls = []
+
+    def fake_raw(method, params=None, timeout=None):
+        calls.append((method, params, timeout))
+        return None
+
+    monkeypatch.setattr(server, "_require", lambda method: None)
+    monkeypatch.setattr(server, "_raw", fake_raw)
+    result = server.plecs_run_script("mdl", "My Script")
+    assert calls[-1] == ("plecs.runScript", ["mdl", {"ScriptName": "My Script"}], 600)
+    assert result["script_name"] == "My Script"
+    assert result["result"] is None
+
+
 def test_sign_and_codegen_refuse_install_dirs(monkeypatch):
     monkeypatch.setattr(server, "_require", lambda method: None)
     with pytest.raises(ToolError, match="refusing to write inside"):

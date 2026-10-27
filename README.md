@@ -5,6 +5,9 @@ An MCP server that exposes the **complete Plexim PLECS Standalone JSON-RPC inter
 Highlights:
 
 - One MCP tool per RPC method (22/22 on PLECS 5.0.6), plus `plecs_rpc` and `plecs_batch` escape hatches
+- `plecs_run_script` is verified: `[model, {"ScriptName": name}]`; script names are listed by `plecs_overview`
+- Argument preflight and `plecs://docs/gotchas` return corrected shapes for common mistakes instead of
+  leaving the agent to guess
 - `plecs_connect` starts PLECS automatically (macOS / Windows / Linux) when the RPC port is closed
 - Results are structured JSON; big arrays are auto-written to disk instead of flooding the context
 - Read-only RPC calls run concurrently with a simulation; blocking/mutating calls are serialized
@@ -137,11 +140,11 @@ PLECS RPC is localhost-only, so the MCP server and PLECS must run on the same ma
 | `plecs_simulate` | `plecs.simulate` | optStruct or list; `summary`, `max_points`, `save_to` |
 | `plecs_analyze` | `plecs.analyze` | Name property; `summary` adds dB/deg, fc, PM |
 | `plecs_state_space` | `get StateSpaceOrder` + `set SwitchVector` + `get Topology` | Switch vector built from `{"FET": 1}` |
-| `plecs_scope` | `plecs.scope` | HoldTrace / RemoveTrace / ClearTraces / SaveTraces / LoadTraces |
+| `plecs_scope` | `plecs.scope` | HoldTrace / RemoveTrace / ClearTraces / SaveTraces / LoadTraces (simulate before SaveTraces) |
 | `plecs_webserver` | `plecs.webserver` | `getScopeCsv` / `getScopeBitmap` / `getCircuitBitmap` …; CSV slicing; images auto-saved (never inline) |
 | `plecs_codegen` | `plecs.codegen` | Requires Coder; diagnostics are surfaced verbatim |
 | `plecs_export_fmu` | `plecs.exportfmu` | Atomic subsystems only |
-| `plecs_run_script` | `plecs.runScript` | **Experimental**: wire shape unknown on 5.0.6 |
+| `plecs_run_script` | `plecs.runScript` | **Verified**: `[model, {"ScriptName": name}]`; returns null, output goes to the PLECS console |
 | `plecs_compare` | `plecs.compare` | Raw lines + parsed `entries` |
 | `plecs_extract_execution_log_data` | `plecs.extractExecutionLogData` | Runtime counters |
 | `plecs_set_cosim_server_enabled` | `plecs.setCoSimServerEnabled` | Global FMU co-simulation switch |
@@ -149,7 +152,7 @@ PLECS RPC is localhost-only, so the MCP server and PLECS must run on the same ma
 | `plecs_protect` | `plecs.protect` | Irreversible once saved; `confirm=true` |
 | `plecs_crash` | `plecs.crash` | Terminates PLECS; `confirm=true` |
 | `plecs_batch` | any | Several RPC calls in one tool call, per-call errors inline |
-| `plecs_overview` | tree + get + statistics | One-call model briefing (solver, analyses, scopes, outports) |
+| `plecs_overview` | tree + get + statistics | One-call model briefing (solver, analyses, scopes, outports, scripts) |
 | `plecs_validate` | tree + get | Structural pre-flight checks (errors/warnings) |
 | `plecs_capture` | `webserver getScopeBitmap` | Scope screenshot as an **inline PNG** |
 | `plecs_plot` | simulate / analyze | Waveform or Bode PNG — **PLECS bitmap by default**, matplotlib fallback |
@@ -203,6 +206,7 @@ The server exposes reference documents as MCP resources (no tool call needed):
 | `plecs://docs/analysis` | SolverOpts/ModelVars/analysis result shapes |
 | `plecs://docs/errors` | symptom → cause → next step |
 | `plecs://docs/limits` | data policy and write guardrails |
+| `plecs://docs/gotchas` | exact argument shapes and common traps |
 
 ## Images and plots
 
@@ -288,8 +292,10 @@ and a second `simulate` still waits for the first. The client mirrors that:
 8. `plecs.protect(path)` takes one subsystem path, returns 0, is idempotent, and only becomes permanent on save.
 9. `plecs.exportfmu(path)` accepts one path and requires an **atomic** subsystem.
 10. `plecs.codegen(model)` runs and returns Coder diagnostics as an RPC error string.
-11. `plecs.runScript` is listed by `system.listMethods` but every wire shape tried returns
-    `server error: invalid method parameters` — kept as experimental with a `params` override.
+11. `plecs.runScript(model, {"ScriptName": name})` works; the second argument is an
+    **optStruct**, not a bare string. A successful run returns `null` and the script's output
+    goes to the PLECS console/Octave log. The script name is the `Name` of a `Script { ... }`
+    block in the `.plecs` file (see demos such as `buck_converter_with_parameter_sweep`).
 12. Business errors still return **HTTP 200**; the JSON `error` field becomes a tool error.
 13. `trust_env=False`: macOS system proxies can hijack `127.0.0.1:1080` (HTTP 502), so PLECS is never
     reached through a proxy.
@@ -299,6 +305,16 @@ and a second `simulate` still waits for the first. The client mirrors that:
 - The RPC model tree exposes outport **names and positions but no port index**, so channel `i` is not
   auto-labelled; `summary.outports` is provided instead of guessing.
 - `.trace` files (`scope SaveTraces`) use a private format and are not parsed.
+- `plecs.runScript` returns `null`; the script's printed output goes to the PLECS console/Octave
+  log and is not captured by the RPC response. Scripts that call `plecs('scope', ...)` internally
+  can close other open models; `plecs_run_script` snapshots and reports them as `closed_models`.
+- Script names are **not** exposed by `getModelTree`; read the `Script { Name "..." }` block in the
+  `.plecs` file (or search it with `plecs_scan`) before calling `plecs_run_script`.
+- `plecs_webserver` command arguments differ: `getScope*` take a scope path, `getCircuitBitmap`
+  takes the **model name**, and `getCursorData` takes `[scope, {"Index": 0}]` (a bare integer is
+  rejected). `plecs_scope("SaveTraces", ...)` requires simulation data in the scope; a scope that
+  has never simulated writes a `.trace` file that `LoadTraces` rejects. Run a simulation first
+  (`HoldTrace` alone does not create data). See `plecs://docs/gotchas`.
 - PLECS 5.0.6 closes **other open models** while serving `getScopeCsv`/`getScopeBitmap`. The
   `plecs_webserver` / `plecs_capture` responses report `closed_models` with a warning (and the
   server logs it); models are not auto-reloaded because that could discard unsaved changes.
@@ -320,6 +336,9 @@ plecs_simulate(model, options=[{"ModelVars": {"R": 10}}, {"ModelVars": {"R": 47}
 # Bode / loop gain
 plecs_analyze(model, "Loop Gain (AC Sweep)", summary=True)
 # → responses[0].gain_crossover_hz / phase_margin_deg / stable
+
+# Simulation Script by name (from the .plecs Script block)
+plecs_run_script(model, "Parameter Sweep (Sequential)")
 
 # scope export with client-side slicing
 plecs_webserver("getScopeCsv", [f"{model}/Scope"], time_range=[0, 1e-3], decimate=10)
@@ -359,7 +378,7 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 |---|---|---|
 | `cannot reach PLECS …` | RPC port closed | Run `plecs_connect` (auto-start) or enable Preferences → RPC |
 | `-32601` | Method missing in this build | `plecs_list_methods` |
-| `-32602` | Invalid parameters | Check the tool schema; for `runScript` pass `params` |
+| `-32602` | Invalid parameters | Check the tool schema; `runScript` needs `[model, {"ScriptName": name}]` |
 | `-32500 … Cannot find analysis named` | Wrong analysis name | Use the Name property from `plecs_get_model_tree` |
 | `-32500 … Invalid scope command` | Unsupported scope command | Use `plecs_webserver getScopeCsv` |
 | `HTTP 502` | A proxy intercepted localhost | Client already uses `trust_env=False`; check the environment |
@@ -369,8 +388,10 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 105 tests
+.venv/bin/python -m pytest -q      # 118 tests
 ```
+
+Current release: **0.2.0** — see [CHANGELOG.md](CHANGELOG.md).
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
   plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,
@@ -404,7 +425,7 @@ src/plecs_mcp/plecsfile.py .plecs parser and structural editor
 src/plecs_mcp/modelops.py  model scan/clone
 src/plecs_mcp/artifacts.py codegen output + FMU metadata
 src/plecs_mcp/data.py      local metrics/FFT/THD
-src/plecs_mcp/server.py    44 MCP tools + 5 resources
+src/plecs_mcp/server.py    44 MCP tools + 6 resources
 examples/quickstart.py     end-to-end smoke test
 tests/                     unit + surface + integration
 ```

@@ -385,6 +385,23 @@ def component_names(root: Node) -> list[str]:
     return [name for name in (component_name(node) for node in components(root)) if name]
 
 
+def script_names(path: str | Path) -> list[str]:
+    """Simulation Script names from a .plecs file (the RPC model tree omits them)."""
+    try:
+        root = parse(read_text(path))
+    except (OSError, ValueError):
+        return []
+    names: list[str] = []
+    for node in find(root, "Script"):
+        value = node.get("Name")
+        if not value:
+            continue
+        name = value.strip('"')
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def library_templates(text: str) -> dict[str, str]:
     """Map component Type -> raw block text (first occurrence) for use as a template."""
     root = parse(text)

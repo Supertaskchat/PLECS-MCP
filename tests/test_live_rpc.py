@@ -29,6 +29,8 @@ LOOP_GAIN = (DEMOS / "buck_converter_with_loop_gain_analysis/buck_converter_with
              if DEMOS else Path("/nonexistent/loop.plecs"))
 WITH_OUTPORT = (DEMOS / "buck_converter_with_parameter_sweep/buck_converter_with_parameter_sweep.plecs"
                 if DEMOS else Path("/nonexistent/out.plecs"))
+FREQUENCY_RESPONSE = (DEMOS / "frequency_response_of_passive_circuit/frequency_response_of_passive_circuit.plecs"
+                      if DEMOS else Path("/nonexistent/frequency_response.plecs"))
 
 
 def _rpc_open() -> bool:
@@ -149,6 +151,28 @@ async def test_scope_csv_export(models):
 
 
 @pytest.mark.asyncio
+async def test_run_script_with_real_demo(tmp_path):
+    if not FREQUENCY_RESPONSE.is_file():
+        pytest.skip("frequency_response demo missing")
+    target = tmp_path / "run_script_demo.plecs"
+    shutil.copy2(FREQUENCY_RESPONSE, target)
+    name = target.stem
+    async with Client(mcp) as client:
+        loaded = await client.call_tool("plecs_load", {"model_path": str(target)})
+        assert not loaded.is_error
+        try:
+            result = await client.call_tool(
+                "plecs_run_script",
+                {"model_name": name,
+                 "script_name": "Sweep filter configuration with small-signal analysis"},
+            )
+            assert result.data["script_name"] == "Sweep filter configuration with small-signal analysis"
+            assert result.data["result"] is None
+        finally:
+            await client.call_tool("plecs_close", {"model_name": name, "force": True})
+
+
+@pytest.mark.asyncio
 async def test_overview_and_validate(models):
     name = models["loop"].stem
     async with Client(mcp) as client:
@@ -259,3 +283,54 @@ async def test_compare_and_model_edit(tmp_path):
     assert isinstance(diff["entries"], list)
     assert edit["validation"]["ok"] is True
     assert '"R_probe"' in edited.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_scope_save_traces_requires_simulation_data(models, tmp_path):
+    name = models["loop"].stem
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            "plecs_scope",
+            {"scope_path": f"{name}/Scope", "command": "SaveTraces",
+             "argument": str(tmp_path / "empty.trace")},
+            raise_on_error=False,
+        )
+    assert result.is_error
+    assert "no simulation data" in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_webserver_cursor_and_circuit_bitmap(monkeypatch, tmp_path, models):
+    monkeypatch.setenv("PLECS_MCP_OUTPUT_DIR", str(tmp_path))
+    name = models["loop"].stem
+    async with Client(mcp) as client:
+        await client.call_tool(
+            "plecs_simulate", {"model_name": name, "options": {"SolverOpts": {"TimeSpan": 1e-3}}}
+        )
+        circuit = (await client.call_tool(
+            "plecs_webserver", {"command": "getCircuitBitmap", "arguments": [name]}
+        )).data
+        cursor = (await client.call_tool(
+            "plecs_webserver", {"command": "getCursorData",
+                                "arguments": [f"{name}/Scope", {"Index": 0}]}
+        )).data
+    assert "iVBOR" not in str(circuit)
+    assert Path(circuit["saved"]["path"]).is_file()
+    assert "cursorData" in cursor and "time" in cursor
+
+
+@pytest.mark.asyncio
+async def test_overview_includes_scripts(tmp_path):
+    if not FREQUENCY_RESPONSE.is_file():
+        pytest.skip("frequency_response demo missing")
+    target = tmp_path / "overview_script.plecs"
+    shutil.copy2(FREQUENCY_RESPONSE, target)
+    name = target.stem
+    async with Client(mcp) as client:
+        loaded = await client.call_tool("plecs_load", {"model_path": str(target)})
+        assert not loaded.is_error
+        try:
+            overview = (await client.call_tool("plecs_overview", {"model_name": name})).data
+        finally:
+            await client.call_tool("plecs_close", {"model_name": name, "force": True})
+    assert "Sweep filter configuration with small-signal analysis" in overview["scripts"]
