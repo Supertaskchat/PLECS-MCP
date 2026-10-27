@@ -34,8 +34,9 @@ All notable changes to this project are documented here.
 
 - PLECS RPC cannot modify `Direction`, `Flipped` or `Position` (`plecs.set` returns
   `Unknown parameter` for each), so all layout is text-level through `plecs_model_edit` and
-  needs a reload. Rotating a placed component invalidates explicit `Points`; drop that
-  connection and re-`connect` so PLECS re-routes.
+  needs a reload. Rotating a placed component invalidates explicit `Points`; there is no
+  delete-connection/set-points operation, so delete the `Points` lines (or rewrite the corners)
+  and reload - re-`connect` appends a duplicate Connection and keeps the stale `Points`.
 
 ## [0.3.0] - 2026-10-27
 

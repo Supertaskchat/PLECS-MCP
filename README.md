@@ -340,7 +340,10 @@ and a second `simulate` still waits for the first. The client mirrors that:
   automatic layout or route wires around obstacles; coordinates are caller-supplied.
   PLECS RPC cannot change `Direction`/`Flipped`/`Position` (`plecs.set` reports
   `Unknown parameter`), so layout is text-level and needs a reload. Rotating a placed component
-  invalidates explicit `Points`; drop that connection and re-`connect`. In-place editing is
+  invalidates explicit `Points`; there is no delete-connection/set-points operation, so delete
+  the `Points` lines in the text (or rewrite the corners) and reload - re-`connect` appends a
+  duplicate Connection and leaves the stale `Points` (verified on 5.0.6: identical bitmap).
+  In-place editing is
   subject to `PLECS_MCP_ALLOWED_ROOTS` and is refused inside install directories.
 - Gain crossover/phase margin only make sense for loop-gain AC sweeps; other analysis kinds are labelled.
 - Auto-start picks the newest install for the **host** OS: macOS `/Applications/PLECS*.app`,

@@ -162,8 +162,10 @@ dialog and are not returned over RPC. To continue without GUI access:
   (`direction`/`flipped` on `add_component`, or `set_orientation` / `set_position`) and reload.
 - Place components with the direction they need: templates carry their own default (a
   `Resistor` is `up`), and an unrotated device forces wires to bend or overlap.
-- Rotating a placed component invalidates explicit `Points` on its connections; remove them
-  (re-`connect` without `points`) so PLECS re-routes orthogonally.
+- Rotating a placed component invalidates explicit `Points` on its connections. There is no
+  delete-connection or set-points operation: delete the `Points` lines in the text (or rewrite
+  the corners) and reload. Re-`connect` does not help - it appends a second Connection and
+  leaves the stale `Points` in place.
 - `plecs_layout_check(model)` turns `getCircuitBitmap` boxes plus `Position`/`Points` into
   findings: `LAYOUT-001` (error) components overlap, `LAYOUT-002` (warning) a wire segment is
   diagonal, `LAYOUT-003` (info) a wire is drawn across a device. Crossings are cosmetic - PLECS
