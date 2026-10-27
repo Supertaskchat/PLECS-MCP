@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from . import plecsfile
 from .paths import check_writable
 
 
@@ -38,7 +39,7 @@ def clone_model(
     src = Path(source).expanduser()
     if not src.is_file():
         raise FileNotFoundError(str(src))
-    text = src.read_text(encoding="utf-8")
+    text = plecsfile.read_text(src)
 
     applied: list[dict[str, Any]] = []
     if name:
@@ -54,7 +55,7 @@ def clone_model(
         applied.append({"pattern": pattern, "count": count, "value": value})
 
     destination = check_writable(target, overwrite=overwrite)
-    destination.write_text(text, encoding="utf-8")
+    plecsfile.write_text(destination, text)
     return {
         "source": str(src),
         "path": str(destination),

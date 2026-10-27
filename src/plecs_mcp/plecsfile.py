@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 OPEN_RE = re.compile(r"^(\s*)([A-Za-z_][\w]*)\s*\{\s*$")
 CLOSE_RE = re.compile(r"^(\s*)\}\s*$")
@@ -47,6 +48,18 @@ class Node:
                 self.entries[index] = (key, value)
                 return
         self.entries.append((key, value))
+
+
+def read_text(path: str | Path) -> str:
+    """Read without newline translation so CRLF files survive a round trip."""
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+def write_text(path: str | Path, text: str) -> None:
+    """Write without newline translation (the inverse of :func:`read_text`)."""
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
 
 
 def _quotes_open(line: str) -> bool:

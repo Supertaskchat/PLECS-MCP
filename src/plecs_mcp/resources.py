@@ -102,6 +102,7 @@ Gain crossover and phase margin are only meaningful for loop-gain AC sweeps.
 - Scope CSV above `PLECS_MCP_MAX_CSV_ROWS` (50000) is written to a file with a 5-row preview.
 - `time_range` / `decimate` are applied client-side (PLECS ignores its own options).
 - `summary=true` returns `min/max/mean/p2p/rms` per signal and Bode margins for AC sweeps.
+- Base64 images are written to `save_to` (or `PLECS_MCP_OUTPUT_DIR`) and never inlined.
 - Writes are refused inside `/Applications`, `/System`, `/Library`, `/usr`, `/bin`, `/etc`.
 - `plecs_close` rejects models modified through `plecs_set` unless `force=true`.
 """,

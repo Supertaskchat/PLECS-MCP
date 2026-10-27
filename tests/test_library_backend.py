@@ -44,6 +44,7 @@ async def test_text_backend_used_when_parse_succeeds(monkeypatch):
 @pytest.mark.asyncio
 async def test_rpc_fallback_when_text_parse_fails(monkeypatch):
     _text_fails(monkeypatch, "parsed 0 components")
+    monkeypatch.setattr(server, "_raw", lambda *a, **k: {"version": [5, 0, 6], "models": []})
     _rpc_ok(monkeypatch)
     async with Client(server.mcp) as client:
         result = (await client.call_tool("plecs_library_search", {"query": "resist"})).data
@@ -55,6 +56,7 @@ async def test_rpc_fallback_when_text_parse_fails(monkeypatch):
 @pytest.mark.asyncio
 async def test_backend_rpc_skips_text(monkeypatch):
     _text_ok(monkeypatch, [])
+    monkeypatch.setattr(server, "_raw", lambda *a, **k: {"version": [5, 0, 6], "models": []})
     _rpc_ok(monkeypatch, items=ITEMS)
     async with Client(server.mcp) as client:
         result = (await client.call_tool("plecs_library_search", {"backend": "rpc"})).data

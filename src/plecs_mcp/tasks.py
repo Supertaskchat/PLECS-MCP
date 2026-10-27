@@ -90,24 +90,32 @@ class TaskRegistry:
 
     def _load(self) -> None:
         try:
-            files = sorted(self._directory.glob("*.json"))
+            files = list(self._directory.glob("*.json"))
         except OSError:
             return
-        for path in files[-MAX_TASKS:]:
+
+        records: list[TaskRecord] = []
+        for path in files:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            record = TaskRecord(
-                id=data.get("id") or path.stem,
-                method=data.get("method", "?"),
-                status=data.get("status", "lost"),
-                created=float(data.get("created") or 0),
-                started=data.get("started"),
-                finished=data.get("finished"),
-                result=data.get("result"),
-                error=data.get("error"),
+            records.append(
+                TaskRecord(
+                    id=data.get("id") or path.stem,
+                    method=data.get("method", "?"),
+                    status=data.get("status", "lost"),
+                    created=float(data.get("created") or 0),
+                    started=data.get("started"),
+                    finished=data.get("finished"),
+                    result=data.get("result"),
+                    error=data.get("error"),
+                )
             )
+
+        # Task ids are random UUIDs, so filename order says nothing about age.
+        records.sort(key=lambda record: record.created)
+        for record in records[-MAX_TASKS:]:
             if record.status in ("pending", "running"):
                 record.status = "lost"
                 record.error = "server restarted before the task finished"

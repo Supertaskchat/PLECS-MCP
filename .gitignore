@@ -5,7 +5,9 @@ __pycache__/
 build/
 dist/
 
+# Local CodeGraph index
+.codegraph/
+
 # Local design notes / research artifacts are not part of the package
 docs/
 doc/
-examples/

@@ -9,8 +9,17 @@ _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
 
 def components_path(app: Path) -> Path | None:
-    candidate = app / "Contents" / "Components.plecs"
-    return candidate if candidate.is_file() else None
+    """Locate ``Components.plecs`` for a macOS bundle or a bare Windows/Linux binary."""
+    candidates = (
+        app / "Contents" / "Components.plecs",  # macOS .app
+        app / "Components.plecs",               # install dir
+        app.parent / "Components.plecs",        # binary in .../bin
+        app.parent.parent / "Components.plecs", # binary in .../bin/<arch>
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _flatten(node: dict[str, Any], out: list[dict[str, Any]], parent: str = "") -> None:

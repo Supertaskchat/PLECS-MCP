@@ -9,11 +9,26 @@ import pytest
 from fastmcp import Client
 
 from plecs_mcp.client import PlecsClient
+from plecs_mcp.launcher import find_plecs_app
 from plecs_mcp.server import mcp
+from plecs_mcp.session import STATE
 
-DEMOS = Path("/Applications/PLECS 5.0.app/Contents/demos")
-LOOP_GAIN = DEMOS / "buck_converter_with_loop_gain_analysis/buck_converter_with_loop_gain_analysis.plecs"
-WITH_OUTPORT = DEMOS / "buck_converter_with_parameter_sweep/buck_converter_with_parameter_sweep.plecs"
+
+def _demo_root() -> Path | None:
+    app = find_plecs_app()
+    if app is None:
+        return None
+    for root in (app / "Contents" / "demos", app / "demos", app.parent / "demos"):
+        if root.is_dir():
+            return root
+    return None
+
+
+DEMOS = _demo_root()
+LOOP_GAIN = (DEMOS / "buck_converter_with_loop_gain_analysis/buck_converter_with_loop_gain_analysis.plecs"
+             if DEMOS else Path("/nonexistent/loop.plecs"))
+WITH_OUTPORT = (DEMOS / "buck_converter_with_parameter_sweep/buck_converter_with_parameter_sweep.plecs"
+                if DEMOS else Path("/nonexistent/out.plecs"))
 
 
 def _rpc_open() -> bool:
@@ -30,24 +45,28 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture(scope="module")
-def models(tmp_path_factory):
-    """Load two temp copies: one with analyses/scopes, one with a top-level outport."""
-    root = tmp_path_factory.mktemp("models")
-    loop = root / "live_loop.plecs"
-    out = root / "live_out.plecs"
+@pytest.fixture()
+def models(tmp_path):
+    """Load two temp copies: one with analyses/scopes, one with a top-level outport.
+
+    Function-scoped because PLECS 5.0.6 closes other open models during scope commands.
+    """
+    loop = tmp_path / "live_loop.plecs"
+    out = tmp_path / "live_out.plecs"
     shutil.copy2(LOOP_GAIN, loop)
     shutil.copy2(WITH_OUTPORT, out)
 
     client = PlecsClient()
     for path in (loop, out):
         client.call("plecs.load", [str(path)])
+        STATE.loaded(path.stem, str(path))
     yield {"loop": loop, "out": out}
     for path in (loop, out):
         try:
             client.call("plecs.close", [path.stem])
         except Exception:
             pass
+        STATE.closed(path.stem)
     client.close()
 
 
@@ -127,3 +146,116 @@ async def test_scope_csv_export(models):
     lines = csv.splitlines()
     assert lines[0].startswith('"Time / s"')
     assert len(lines) > 1
+
+
+@pytest.mark.asyncio
+async def test_overview_and_validate(models):
+    name = models["loop"].stem
+    async with Client(mcp) as client:
+        overview = (await client.call_tool("plecs_overview", {"model_name": name})).data
+        validation = (await client.call_tool("plecs_validate", {"model_name": name})).data
+    assert overview["path"].endswith(".plecs")
+    assert overview["counts"]["component"] > 0
+    assert validation["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_summary(models):
+    name = models["loop"].stem
+    async with Client(mcp) as client:
+        analysis = (await client.call_tool(
+            "plecs_analyze", {"model_name": name, "analysis_name": "Loop Gain (AC Sweep)", "summary": True}
+        )).data["summary"]
+    assert analysis["kind"] == "frequency-domain"
+    assert analysis["responses"] and "magnitude_db" in analysis["responses"][0]
+
+
+@pytest.mark.asyncio
+async def test_capture_and_plot(models):
+    name = models["loop"].stem
+    async with Client(mcp) as client:
+        capture = (await client.call_tool("plecs_capture", {"model_name": name, "inline": False})).data
+        waveform = (await client.call_tool(
+            "plecs_plot", {"model_name": name, "kind": "waveform", "inline": False}
+        )).data
+        bode = (await client.call_tool(
+            "plecs_plot",
+            {"model_name": name, "kind": "bode", "analysis_name": "Loop Gain (AC Sweep)", "inline": False},
+        )).data
+    assert capture["bytes"] > 1000
+    assert waveform["renderer"] in ("plecs", "matplotlib") and waveform["bytes"] > 1000
+    assert bode["renderer"] in ("plecs", "matplotlib") and bode["bytes"] > 1000
+
+
+@pytest.mark.asyncio
+async def test_webserver_bitmap_is_saved_not_inlined(monkeypatch, tmp_path, models):
+    monkeypatch.setenv("PLECS_MCP_OUTPUT_DIR", str(tmp_path))
+    name = models["loop"].stem
+    async with Client(mcp) as client:
+        await client.call_tool(
+            "plecs_simulate", {"model_name": name, "options": {"SolverOpts": {"TimeSpan": 1e-3}}}
+        )
+        bitmap = (await client.call_tool(
+            "plecs_webserver", {"command": "getScopeBitmap", "arguments": [f"{name}/Scope"]}
+        )).data
+    assert "iVBOR" not in str(bitmap)
+    saved = Path(bitmap["saved"]["path"])
+    assert saved.is_file() and saved.stat().st_size > 1000
+
+
+@pytest.mark.asyncio
+async def test_parameter_sweep_saves_list_and_analyze_data_reads_it(monkeypatch, tmp_path, models):
+    monkeypatch.setenv("PLECS_MCP_OUTPUT_DIR", str(tmp_path))
+    name = models["out"].stem
+    async with Client(mcp) as client:
+        sweep = (await client.call_tool(
+            "plecs_simulate",
+            {
+                "model_name": name,
+                "options": [
+                    {"SolverOpts": {"TimeSpan": 2e-4}},
+                    {"SolverOpts": {"TimeSpan": 3e-4}},
+                ],
+                "max_points": 1,
+            },
+        )).data
+        analysed = (await client.call_tool("plecs_analyze_data", {"result_path": sweep["saved"]["path"]})).data
+    assert analysed["kind"] == "parameter-sweep"
+    assert analysed["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_check_passes_on_real_simulation(models):
+    name = models["out"].stem
+    async with Client(mcp) as client:
+        result = (await client.call_tool(
+            "plecs_check",
+            {"model_name": name, "checks": [{"type": "time", "metric": "points", "op": ">", "value": 0}]},
+        )).data
+    assert result["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_compare_and_model_edit(tmp_path):
+    first = tmp_path / "first.plecs"
+    second = tmp_path / "second.plecs"
+    shutil.copy2(WITH_OUTPORT, first)
+    shutil.copy2(WITH_OUTPORT, second)
+    edited = tmp_path / "edited.plecs"
+    async with Client(mcp) as client:
+        diff = (await client.call_tool("plecs_compare", {"before_path": str(first), "after_path": str(second)})).data
+        edit = (await client.call_tool(
+            "plecs_model_edit",
+            {
+                "path": str(first),
+                "output": str(edited),
+                "operations": [
+                    {"op": "add_component", "type": "Resistor", "name": "R_probe",
+                     "position": [900, 500], "parameters": {"R": "10"}}
+                ],
+                "validate": True,
+            },
+        )).data
+    assert isinstance(diff["entries"], list)
+    assert edit["validation"]["ok"] is True
+    assert '"R_probe"' in edited.read_text(encoding="utf-8")

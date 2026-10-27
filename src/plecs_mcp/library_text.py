@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,16 @@ def components_file(explicit: str | None = None) -> Path | None:
             roots.extend(root.glob("**/Components.plecs"))
         except OSError:
             continue
+
+    if sys.platform == "win32":
+        from .launcher import windows_roots
+
+        for root in windows_roots():
+            for pattern in ("Plexim/**/Components.plecs", "**/PLECS*/Components.plecs"):
+                try:
+                    roots.extend(root.glob(pattern))
+                except OSError:
+                    continue
 
     for candidate in roots:
         if candidate.is_file():

@@ -11,7 +11,7 @@ Highlights:
 - Write guardrails: install dirs are refused, stray paths need `PLECS_MCP_ALLOWED_ROOTS`, overwrites need `overwrite=true`
 - Irreversible operations (`protect`, `crash`) require `confirm=true`
 - MCP **resources** ship the RPC/analysis/error references the agent needs
-- Scope bitmaps and generated waveforms/Bode plots come back as **inline PNG images**
+- `plecs_capture` / `plecs_plot` return **inline PNG images**; raw `plecs_webserver` bitmaps are saved to disk
 - Async tasks (`submit`/`task`/`task_result`), acceptance checks, component-library search,
   file-level model cloning and local FFT/THD post-processing
 
@@ -138,7 +138,7 @@ PLECS RPC is localhost-only, so the MCP server and PLECS must run on the same ma
 | `plecs_analyze` | `plecs.analyze` | Name property; `summary` adds dB/deg, fc, PM |
 | `plecs_state_space` | `get StateSpaceOrder` + `set SwitchVector` + `get Topology` | Switch vector built from `{"FET": 1}` |
 | `plecs_scope` | `plecs.scope` | HoldTrace / RemoveTrace / ClearTraces / SaveTraces / LoadTraces |
-| `plecs_webserver` | `plecs.webserver` | `getScopeCsv` / `getScopeBitmap` / `getCircuitBitmap` …; CSV slicing |
+| `plecs_webserver` | `plecs.webserver` | `getScopeCsv` / `getScopeBitmap` / `getCircuitBitmap` …; CSV slicing; images auto-saved (never inline) |
 | `plecs_codegen` | `plecs.codegen` | Requires Coder; diagnostics are surfaced verbatim |
 | `plecs_export_fmu` | `plecs.exportfmu` | Atomic subsystems only |
 | `plecs_run_script` | `plecs.runScript` | **Experimental**: wire shape unknown on 5.0.6 |
@@ -168,7 +168,8 @@ PLECS RPC is localhost-only, so the MCP server and PLECS must run on the same ma
 
 ### Return shape
 
-Every tool returns a JSON object (structured content):
+Most tools return a JSON object (structured content). `plecs_capture` and `plecs_plot` return MCP
+image content when `inline=true` (the default) and JSON metadata when `inline=false`:
 
 - dict results as-is; scalars/arrays wrapped as `{"result": ...}`
 - `plecs_list_methods` → `{"methods": [...]}`; `plecs_compare` → `{"diff": [...], "entries": [...]}`
@@ -184,10 +185,12 @@ Every tool returns a JSON object (structured content):
 | Scope CSV above `max_rows` | Full CSV saved, response has `columns`, `rows`, `saved`, 5-row `preview` |
 | `time_range` / `decimate` | Applied client-side (PLECS ignores its own range options) |
 | `OutputFormat=MatFile` | Base64 MAT decoded and written to `save_to` (or refused for unsafe paths) |
-| PNG payloads | Written to `save_to`; never inlined |
+| PNG payloads | Written to `save_to`; without it, auto-saved under `PLECS_MCP_OUTPUT_DIR`; never inlined |
+| `getScopeSignals` images | Nested base64 bitmaps are saved as `<save_to>-1.png`, `-2.png`, … (or auto-saved) |
 
-Writes are refused inside `/Applications`, `/System`, `/Library`, `/usr`, `/bin`, `/sbin`, `/etc`,
-and outside `PLECS_MCP_ALLOWED_ROOTS`. Existing files are never overwritten without `overwrite=true`.
+MCP-mediated writes are refused inside `/Applications`, `/System`, `/Library`, `/usr`, `/bin`,
+`/sbin`, `/etc`, and outside `PLECS_MCP_ALLOWED_ROOTS`. Existing files are never overwritten
+without `overwrite=true`. PLECS-side outputs (FMU export) follow the path configured in the model.
 
 ## MCP resources
 
@@ -239,6 +242,8 @@ The response contains `passed`, per-check `actual`/`pass`, and the summaries use
 
 - `plecs_library_search("resistor")` parses the installed `Components.plecs` **as text** (≈9.7k
   components, 0.6 s cold / 5 ms cached) — works without PLECS and without the 43 MB RPC tree.
+  `Components.plecs` is located next to a macOS `.app` bundle or a Windows/Linux install binary
+  (`PLECS_LIBRARY_PATH` overrides discovery).
   Cache lives next to the output dir; `refresh=true` rebuilds it.
   `backend="auto"` (default) keeps the RPC model tree as a **fallback**: if the file is missing,
   unreadable, corrupt, or yields 0 components, the call ensures a PLECS connection first —
@@ -249,7 +254,8 @@ The response contains `passed`, per-check `actual`/`pass`, and the summaries use
 - `plecs_scan(path, "TimeSpan")` greps model text without loading it.
 - `plecs_model_edit(path, operations, confirm|output)` performs **structural** edits on a copy of a
   `.plecs` file: add/remove components, set parameters, wire terminals, add outports. Everything
-  outside the edited span stays byte-identical; the result is loaded in PLECS to verify.
+  outside the edited span stays byte-identical (including CRLF line endings); the result is loaded
+  in PLECS to verify. In-place edits obey the normal write policy and create a `.bak-<ms>` backup.
   This is the alternative to schematic editing, which the RPC does not expose.
 - `plecs_model_clone(...)` remains for copy + regex-level rewrites.
 - `plecs_artifacts(dir)` / `plecs_fmu_info(path)` inspect codegen output and FMU metadata.
@@ -257,8 +263,9 @@ The response contains `passed`, per-check `actual`/`pass`, and the summaries use
 ## Local post-processing
 
 `plecs_analyze_data(result_path, fundamental=50)` works on a saved JSON result (the ones written
-by the inline-point limit): per-signal metrics plus FFT-based THD and harmonic amplitudes. This
-covers the "arbitrary code execution" gap without touching PLECS' console.
+by the inline-point limit): per-signal metrics plus FFT-based THD and harmonic amplitudes. Parameter
+sweeps are saved as a JSON list and are summarised per entry. This covers the "arbitrary code
+execution" gap without touching PLECS' console.
 
 ## Concurrency
 
@@ -292,8 +299,12 @@ and a second `simulate` still waits for the first. The client mirrors that:
 - The RPC model tree exposes outport **names and positions but no port index**, so channel `i` is not
   auto-labelled; `summary.outports` is provided instead of guessing.
 - `.trace` files (`scope SaveTraces`) use a private format and are not parsed.
+- PLECS 5.0.6 closes **other open models** while serving `getScopeCsv`/`getScopeBitmap`. The
+  `plecs_webserver` / `plecs_capture` responses report `closed_models` with a warning (and the
+  server logs it); models are not auto-reloaded because that could discard unsaved changes.
 - `plecs_model_edit` handles structure (components/params/wires/outports) but does **not** do
-  automatic layout or route wires around obstacles; coordinates are caller-supplied.
+  automatic layout or route wires around obstacles; coordinates are caller-supplied. In-place
+  editing is subject to `PLECS_MCP_ALLOWED_ROOTS` and is refused inside install directories.
 - Gain crossover/phase margin only make sense for loop-gain AC sweeps; other analysis kinds are labelled.
 - Auto-start picks the newest install for the **host** OS: macOS `/Applications/PLECS*.app`,
   Windows `%ProgramFiles%\Plexim\*\plecs.exe`, Linux `plecs` on `PATH` or `/opt/plecs*/plecs`.
@@ -358,17 +369,19 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 81 tests
+.venv/bin/python -m pytest -q      # 105 tests
 ```
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
-  plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources
-- Surface: all 26 tools registered/documented; destructive tools need confirmation; batch/limits/guards
-- Integration: when `127.0.0.1:1080` is reachable, exercises connect/load/tree/get/simulate/summary/CSV
-  on `/tmp` copies of the bundled demos (user models are never touched)
+  plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,
+  sweep-result post-processing, image externalisation, task age ordering, CRLF round-trip
+- Surface: all 44 tools registered/documented; destructive tools need confirmation; batch/limits/guards
+- Integration: when `127.0.0.1:1080` is reachable, exercises connect/load/tree/get/simulate/analyze/
+  summary/CSV/capture/plot/tasks/check/compare/model_edit on `/tmp` copies of the bundled demos
+  (user models are never touched)
 
-CI (`.github/workflows/ci.yml`) runs the unit/surface suite on Python 3.10 and 3.13; integration tests
-skip automatically when PLECS is not installed.
+CI (`.github/workflows/ci.yml`) runs the unit/surface suite on Python 3.10 and 3.13 on Ubuntu and
+macOS; integration tests skip automatically when PLECS is not installed.
 
 ## Layout
 

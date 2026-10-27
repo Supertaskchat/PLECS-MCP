@@ -58,18 +58,20 @@ def test_checks_report_missing_inputs():
 
 # ---------------------------------------------------------------- tasks
 
-def test_task_registry_roundtrip():
-    record = tasks.TASKS.submit("demo", lambda: {"value": 42})
+def test_task_registry_roundtrip(tmp_path: Path):
+    registry = tasks.TaskRegistry(directory=tmp_path)
+    record = registry.submit("demo", lambda: {"value": 42})
     deadline = time.time() + 5
     while time.time() < deadline and record.status == "running":
         time.sleep(0.01)
     assert record.status == "done"
     assert record.result == {"value": 42}
-    assert tasks.TASKS.get(record.id) is not None
+    assert registry.get(record.id) is not None
 
 
-def test_task_registry_captures_errors():
-    record = tasks.TASKS.submit("boom", lambda: (_ for _ in ()).throw(RuntimeError("nope")))
+def test_task_registry_captures_errors(tmp_path: Path):
+    registry = tasks.TaskRegistry(directory=tmp_path)
+    record = registry.submit("boom", lambda: (_ for _ in ()).throw(RuntimeError("nope")))
     deadline = time.time() + 5
     while time.time() < deadline and record.status == "running":
         time.sleep(0.01)

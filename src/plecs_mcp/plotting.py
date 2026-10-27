@@ -1,4 +1,7 @@
-"""PNG rendering for waveforms and Bode plots (matplotlib, Agg backend)."""
+"""PNG rendering for waveforms and Bode plots (matplotlib, Agg backend).
+
+matplotlib is imported lazily: RPC-only sessions should not pay its startup cost.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +10,9 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any, Sequence
+
+from .summary import frequency_responses
+
 
 def _mpl_cache() -> str:
     preferred = Path.home() / ".plecs-mcp" / "matplotlib"
@@ -20,16 +26,34 @@ def _mpl_cache() -> str:
         return os.path.join(tempfile.gettempdir(), "plecs-mcp-matplotlib")
 
 
-os.environ.setdefault("MPLCONFIGDIR", _mpl_cache())
-
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
+_PYPLOT: Any = None
+_NUMPY: Any = None
 
 
-def _downsample(x: Sequence[float], y: Sequence[float], limit: int) -> tuple[np.ndarray, np.ndarray]:
+def _plt() -> Any:
+    global _PYPLOT
+    if _PYPLOT is None:
+        os.environ.setdefault("MPLCONFIGDIR", _mpl_cache())
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        _PYPLOT = plt
+    return _PYPLOT
+
+
+def _np() -> Any:
+    global _NUMPY
+    if _NUMPY is None:
+        import numpy as np
+
+        _NUMPY = np
+    return _NUMPY
+
+
+def _downsample(x: Sequence[float], y: Sequence[float], limit: int) -> tuple[Any, Any]:
+    np = _np()
     xa, ya = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
     if limit and xa.size > limit:
         step = int(np.ceil(xa.size / limit))
@@ -44,6 +68,7 @@ def time_series_png(
     title: str | None = None,
     max_points: int = 5000,
 ) -> bytes:
+    plt = _plt()
     t, _ = _downsample(time, time, max_points)
     figure, axes = plt.subplots(len(signals) or 1, 1, figsize=(9, 2.4 * max(len(signals), 1)), squeeze=False)
     for index, signal in enumerate(signals):
@@ -69,6 +94,8 @@ def frequency_png(
     names: Sequence[str] | None = None,
     title: str | None = None,
 ) -> bytes:
+    plt = _plt()
+    np = _np()
     responses = list(responses)[:4]
     figure, axes = plt.subplots(len(responses), 2, figsize=(11, 2.6 * max(len(responses), 1)), squeeze=False)
     for index, (real, imag) in enumerate(responses):
@@ -95,11 +122,4 @@ def frequency_png(
 
 
 def responses_from_result(result: dict[str, Any]) -> list[tuple[list[float], list[float]]]:
-    gr, gi = result.get("Gr"), result.get("Gi")
-    if isinstance(gr, list) and gr and isinstance(gr[0], list):
-        real_rows = [row for row in gr if isinstance(row, list)]
-        imag_rows = [row for row in gi if isinstance(row, list)] if isinstance(gi, list) else []
-        return [(real, imag_rows[i] if i < len(imag_rows) else [0.0] * len(real)) for i, real in enumerate(real_rows)]
-    if isinstance(gr, list):
-        return [(gr, gi if isinstance(gi, list) else [0.0] * len(gr))]
-    return []
+    return frequency_responses(result)

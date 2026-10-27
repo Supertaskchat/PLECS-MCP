@@ -63,6 +63,8 @@ from .diagnose import diagnose, with_hint
 from .resources import DOCS
 from .tasks import TASKS
 
+logger = logging.getLogger("plecs_mcp.server")
+
 mcp = FastMCP(
     name="PLECS",
     instructions=(
@@ -163,6 +165,11 @@ def _point_count(payload: Any) -> int:
         value = payload.get(key)
         if isinstance(value, list):
             return len(value)
+    values = payload.get("Values")
+    if isinstance(values, list) and values:
+        if all(isinstance(row, list) for row in values):
+            return max((len(row) for row in values), default=0)
+        return len(values)
     return 0
 
 
@@ -500,7 +507,7 @@ def plecs_set(path: str, parameter: str, value: str | int | float) -> dict[str, 
     return result
 
 
-@mcp.tool(name="plecs_state_space")
+@mcp.tool(name="plecs_state_space", annotations={"idempotentHint": True})
 def plecs_state_space(
     model_name: str,
     switches: dict[str, int] | list[int] | None = None,
@@ -611,6 +618,132 @@ def plecs_scope(scope_path: str, command: str, argument: Any = None) -> dict[str
     return _call("plecs.scope", params)
 
 
+def _externalize_images(
+    payload: Any,
+    *,
+    save_to: str | None,
+    overwrite: bool,
+    stem: str,
+) -> tuple[Any, list[dict[str, Any]]]:
+    """Write every base64 ``imageData`` entry to disk and replace it with metadata.
+
+    ``getScopeBitmap`` returns one image; ``getScopeSignals`` nests images in a list.
+    With several images ``save_to`` is treated as a stem and ``-1``/``-2`` suffixes are
+    added. Without ``save_to`` images go under ``PLECS_MCP_OUTPUT_DIR``.
+    """
+    images: list[str] = []
+
+    def collect(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "imageData":
+                    if isinstance(value, str):
+                        images.append(value)
+                    elif isinstance(value, list):
+                        images.extend(item for item in value if isinstance(item, str))
+                else:
+                    collect(value)
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    collect(payload)
+    total = len(images)
+    if total == 0:
+        return payload, []
+
+    index = 0
+    saved: list[dict[str, Any]] = []
+
+    def save_one(data: str) -> dict[str, Any]:
+        nonlocal index
+        index += 1
+        raw = base64_to_bytes(data, "image")
+        suffix = ".png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else ".bin"
+        if save_to:
+            if total == 1:
+                target: str | Path = save_to
+            else:
+                path = Path(save_to).expanduser()
+                target = path.with_name(f"{path.stem}-{index}{path.suffix or suffix}")
+        else:
+            target = unique_output_path(output_dir(), f"{stem}-{index}", suffix)
+        meta = write_bytes(target, raw, overwrite=overwrite)
+        saved.append(meta)
+        return meta
+
+    def replace(node: Any) -> Any:
+        if isinstance(node, dict):
+            out: dict[str, Any] = {}
+            for key, value in node.items():
+                if key == "imageData":
+                    if isinstance(value, str):
+                        out[key] = {"saved": save_one(value)}
+                    elif isinstance(value, list):
+                        out[key] = [
+                            {"saved": save_one(item)} if isinstance(item, str) else replace(item)
+                            for item in value
+                        ]
+                    else:
+                        out[key] = replace(value)
+                else:
+                    out[key] = replace(value)
+            return out
+        if isinstance(node, list):
+            return [replace(item) for item in node]
+        return node
+
+    return replace(payload), saved
+
+
+def _scope_snapshot() -> dict[str, dict[str, Any]]:
+    """Open non-library models, used to detect models PLECS closes during a scope call."""
+    try:
+        stats = _raw("plecs.statistics") or {}
+    except ToolError:
+        return {}
+    if not isinstance(stats, dict):
+        return {}
+    return {
+        model.get("id"): model
+        for model in stats.get("models", [])
+        if isinstance(model, dict) and model.get("id") and not model.get("library")
+    }
+
+
+def _scope_call(command: str, arguments: list[Any]) -> tuple[Any, list[dict[str, Any]]]:
+    """Run a webserver scope command and report other models PLECS silently closed.
+
+    PLECS 5.0.6 closes every other open model while serving getScopeCsv/getScopeBitmap.
+    Reloading automatically could discard unsaved changes, so the caller is warned.
+    """
+    watched = command.startswith(("getScope", "getCircuit", "getCursor"))
+    before = _scope_snapshot() if watched else {}
+    result = _raw("plecs.webserver", [command, *arguments])
+    if not before:
+        return result, []
+    after = _scope_snapshot()
+    lost = [info for model_id, info in before.items() if model_id not in after]
+    if lost:
+        logger.warning(
+            "PLECS closed %d other model(s) during plecs.webserver %s: %s",
+            len(lost),
+            command,
+            ", ".join(str(info.get("id")) for info in lost),
+        )
+    return result, lost
+
+
+def _with_closed_models(payload: dict[str, Any], lost: list[dict[str, Any]]) -> dict[str, Any]:
+    if lost:
+        payload["closed_models"] = lost
+        payload["warning"] = (
+            "PLECS closed other open models while serving this webserver command; "
+            "reload them with plecs_load(filename)"
+        )
+    return payload
+
+
 @mcp.tool(name="plecs_webserver")
 def plecs_webserver(
     command: str,
@@ -630,17 +763,16 @@ def plecs_webserver(
     ``getScopeCsv`` is base64 CSV; PLECS ignores its own range/size options, so
     ``time_range=[t0,t1]`` and ``decimate=N`` are applied here. CSVs above ``max_rows``
     (default 50000) are written to the MCP output dir and only metadata is returned.
-    ``getScopeBitmap``/``getScopeSignals`` contain base64 PNG: with ``save_to`` the image is
-    written to that file and only metadata is returned.
+    Base64 images (``getScopeBitmap``, ``getCircuitBitmap``, ``getScopeSignals``) are
+    written to ``save_to`` (or auto-saved under ``PLECS_MCP_OUTPUT_DIR``) and replaced
+    by ``saved`` metadata; image bytes are never returned inline.
     """
-    result = _raw("plecs.webserver", [command, *(arguments or [])])
-    if not isinstance(result, dict):
-        return _wrap(result)
+    result, lost = _scope_call(command, arguments or [])
 
-    try:
-        if isinstance(result.get("csv"), str):
+    if isinstance(result, dict) and isinstance(result.get("csv"), str):
+        try:
             if not decode_csv:
-                return _wrap(result)
+                return _with_closed_models(_wrap(result), lost)
             text = base64_to_text(result["csv"], "scope CSV")
             header, rows = slice_csv(text, time_range, decimate)
             limit = max_rows if max_rows is not None else _limit("PLECS_MCP_MAX_CSV_ROWS", MAX_CSV_ROWS)
@@ -658,27 +790,43 @@ def plecs_webserver(
 
             if save_to:
                 meta = write_bytes(save_to, rendered.encode("utf-8"), overwrite=overwrite)
-                return {"saved": meta, "rows": len(rows), "columns": header,
-                        "filtered": bool(time_range or decimate)}
+                return _with_closed_models(
+                    {"saved": meta, "rows": len(rows), "columns": header,
+                     "filtered": bool(time_range or decimate)},
+                    lost,
+                )
             if len(rows) > limit:
                 target = unique_output_path(output_dir(), f"{command}-{arguments[0] if arguments else 'scope'}", ".csv")
                 target.write_text(rendered, encoding="utf-8")
-                return {
-                    "columns": header,
-                    "rows": len(rows),
-                    "saved": {"path": str(target), "bytes": target.stat().st_size},
-                    "preview": [header] + rows[:5],
-                    "note": f"CSV exceeded {limit} rows; full data written to {target}",
-                }
-            return {**result, "csv": rendered, "columns": header, "rows": len(rows)}
-        elif save_to and isinstance(result.get("imageData"), str):
-            meta = write_bytes(save_to, base64_to_bytes(result["imageData"], "image"), overwrite=overwrite)
-            rest = {k: v for k, v in result.items() if k != "imageData"}
-            return {"saved": meta, **rest}
+                return _with_closed_models(
+                    {
+                        "columns": header,
+                        "rows": len(rows),
+                        "saved": {"path": str(target), "bytes": target.stat().st_size},
+                        "preview": [header] + rows[:5],
+                        "note": f"CSV exceeded {limit} rows; full data written to {target}",
+                    },
+                    lost,
+                )
+            return _with_closed_models({**result, "csv": rendered, "columns": header, "rows": len(rows)}, lost)
+        except PlecsPayloadError as exc:
+            raise ToolError(str(exc)) from exc
+
+    try:
+        external, images = _externalize_images(
+            result,
+            save_to=save_to,
+            overwrite=overwrite,
+            stem=f"{command}-{arguments[0] if arguments else 'scope'}",
+        )
     except PlecsPayloadError as exc:
         raise ToolError(str(exc)) from exc
 
-    return _wrap(result)
+    payload = _wrap(external)
+    if images:
+        payload["images"] = images
+        payload.setdefault("saved", images[0])
+    return _with_closed_models(payload, lost)
 
 
 # ---------------------------------------------------------------- code generation / packaging
@@ -696,6 +844,10 @@ def plecs_codegen(path: str, options: dict[str, Any] | None = None, output_dir: 
     if options is not None or output_dir is not None:
         params.append(options or {})
     if output_dir is not None:
+        try:
+            output_dir = str(check_writable(output_dir, overwrite=True))
+        except PathNotAllowed as exc:
+            raise ToolError(str(exc)) from exc
         params.append(output_dir)
     return _call("plecs.codegen", params, timeout=3600)
 
@@ -780,6 +932,10 @@ def plecs_set_cosim_server_enabled(enabled: bool) -> dict[str, Any]:
 @mcp.tool(name="plecs_sign", annotations={"destructiveHint": True})
 def plecs_sign(file_path: str) -> dict[str, Any]:
     """Append the PLECS demo signature to a model file (modifies the file)."""
+    try:
+        file_path = str(check_writable(file_path, overwrite=True))
+    except PathNotAllowed as exc:
+        raise ToolError(str(exc)) from exc
     _require("plecs.sign")
     return _call("plecs.sign", [file_path])
 
@@ -930,11 +1086,17 @@ def plecs_capture(
         scope = f"{model_name}/Analyses/{analysis_name}"
     else:
         scope = scope_path or f"{model_name}/Scope"
-    result = _raw("plecs.webserver", ["getScopeBitmap", scope])
+    result, lost = _scope_call("getScopeBitmap", [scope])
     if not isinstance(result, dict) or not isinstance(result.get("imageData"), str):
         raise ToolError(f"no bitmap returned for {scope}")
     png = base64_to_bytes(result["imageData"], "scope bitmap")
     meta = {"scope": scope, "bytes": len(png), "plot_info": result.get("plotInfo")}
+    if lost:
+        meta["closed_models"] = lost
+        meta["warning"] = (
+            "PLECS closed other open models while rendering this bitmap; "
+            "reload them with plecs_load(filename)"
+        )
     if save_to:
         meta["saved"] = write_bytes(save_to, png, overwrite=overwrite)
         return meta
@@ -969,7 +1131,7 @@ def plecs_plot(
 
     def _plecs_bitmap(path: str) -> bytes | None:
         try:
-            result = _raw("plecs.webserver", ["getScopeBitmap", path])
+            result, _lost = _scope_call("getScopeBitmap", [path])
         except ToolError:
             return None
         if isinstance(result, dict) and isinstance(result.get("imageData"), str):
@@ -1138,7 +1300,7 @@ def plecs_check(
 
 # ---------------------------------------------------------------- discovery / files
 
-@mcp.tool(name="plecs_library_search", annotations={"readOnlyHint": True})
+@mcp.tool(name="plecs_library_search")
 def plecs_library_search(
     query: str = "",
     limit: int = 50,
@@ -1233,7 +1395,7 @@ def plecs_model_clone(
     """
     try:
         meta = modelops.clone_model(source, target, name=name, replacements=replacements, overwrite=overwrite)
-    except (FileNotFoundError, PathNotAllowed) as exc:
+    except (OSError, PathNotAllowed) as exc:
         raise ToolError(str(exc)) from exc
 
     if validate:
@@ -1269,19 +1431,14 @@ def plecs_fmu_info(path: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- local post-processing
 
-@mcp.tool(name="plecs_analyze_data", annotations={"readOnlyHint": True})
-def plecs_analyze_data(
-    result_path: str,
-    signal: int | None = None,
-    fundamental: float | None = None,
-    harmonics: int = 10,
+def _analyze_payload(
+    payload: Any,
+    signal: int | None,
+    fundamental: float | None,
+    harmonics: int,
 ) -> dict[str, Any]:
-    """Post-process a saved JSON result: metrics, and optional FFT/THD at a fundamental."""
-    target = Path(result_path).expanduser()
-    if not target.is_file():
-        raise ToolError(f"result file not found: {target}")
-    payload = json.loads(target.read_text(encoding="utf-8"))
-
+    if not isinstance(payload, dict):
+        raise ToolError("result entry is not a JSON object")
     if "F" in payload or "Gr" in payload:
         return {"kind": "frequency-domain", **summarize_result(payload)}
 
@@ -1297,9 +1454,38 @@ def plecs_analyze_data(
     for index in indices:
         entry: dict[str, Any] = {"index": index, "metrics": data_mod.metrics(channels[index])}
         if fundamental:
-            entry["thd"] = data_mod.thd(time, channels[index], fundamental, harmonics)
+            try:
+                entry["thd"] = data_mod.thd(time, channels[index], fundamental, harmonics)
+            except ValueError as exc:
+                raise ToolError(f"THD failed for signal {index}: {exc}") from exc
         entries.append(entry)
     return {"kind": "time-series", "points": len(time), "signals": entries}
+
+
+@mcp.tool(name="plecs_analyze_data", annotations={"readOnlyHint": True})
+def plecs_analyze_data(
+    result_path: str,
+    signal: int | None = None,
+    fundamental: float | None = None,
+    harmonics: int = 10,
+) -> dict[str, Any]:
+    """Post-process a saved JSON result: metrics, and optional FFT/THD at a fundamental.
+
+    Accepts a single result object or the list written for a parameter sweep; list
+    entries are summarised (and THD-processed when ``fundamental`` is given).
+    """
+    target = Path(result_path).expanduser()
+    if not target.is_file():
+        raise ToolError(f"result file not found: {target}")
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ToolError(f"result file is not valid JSON: {exc}") from exc
+
+    if isinstance(payload, list):
+        results = [_analyze_payload(item, signal, fundamental, harmonics) for item in payload]
+        return {"kind": "parameter-sweep", "count": len(results), "results": results}
+    return _analyze_payload(payload, signal, fundamental, harmonics)
 
 
 @mcp.tool(name="plecs_diagnose", annotations={"readOnlyHint": True})
@@ -1337,9 +1523,10 @@ def plecs_model_edit(
          "target": "R2", "target_terminal": 1, "points": [[110, 200], [400, 200]]}
         {"op": "add_outport", "name": "Vout", "position": [600, 200]}
 
-    In-place editing requires ``confirm=true`` and creates a ``.bak-<ts>`` backup;
-    pass ``output`` to write elsewhere. ``validate`` loads the result in PLECS and
-    rolls back the in-place edit if loading fails.
+    In-place editing requires ``confirm=true``, obeys the same write policy as other
+    tools (allowed roots, no install dirs), and creates a ``.bak-<ms>`` backup; pass
+    ``output`` to write elsewhere. ``validate`` loads the result in PLECS and rolls
+    back the in-place edit if loading fails.
     """
     source = Path(path).expanduser()
     if not source.is_file():
@@ -1352,13 +1539,12 @@ def plecs_model_edit(
 
     destination = source if output is None else Path(output).expanduser()
     in_place = destination.resolve() == source.resolve()
-    if not in_place:
-        try:
-            destination = check_writable(destination, overwrite=False)
-        except PathNotAllowed as exc:
-            raise ToolError(str(exc)) from exc
+    try:
+        destination = check_writable(destination, overwrite=in_place)
+    except PathNotAllowed as exc:
+        raise ToolError(str(exc)) from exc
 
-    original = source.read_text(encoding="utf-8")
+    original = plecsfile.read_text(source)
     text = original
     templates: dict[str, str] | None = None
     applied: list[dict[str, Any]] = []
@@ -1413,10 +1599,18 @@ def plecs_model_edit(
 
     backup = None
     if in_place:
-        backup = source.with_name(f"{source.name}.bak-{int(_time.time())}")
+        stamp = int(_time.time() * 1000)
+        backup = source.with_name(f"{source.name}.bak-{stamp}")
+        counter = 1
+        while backup.exists():
+            backup = source.with_name(f"{source.name}.bak-{stamp}-{counter}")
+            counter += 1
         shutil.copy2(source, backup)
 
-    destination.write_text(text, encoding="utf-8")
+    try:
+        plecsfile.write_text(destination, text)
+    except OSError as exc:
+        raise ToolError(f"could not write {destination}: {exc}") from exc
     result: dict[str, Any] = {
         "source": str(source),
         "destination": str(destination),

@@ -104,6 +104,11 @@ def _interp_log(x0: float, x1: float, y0: float, y1: float, target: float) -> fl
     return 10 ** (math.log10(x0) + ratio * (math.log10(x1) - math.log10(x0)))
 
 
+def frequency_responses(result: dict[str, Any]) -> list[tuple[list[float], list[float]]]:
+    """Normalise a PLECS ``{Gr, Gi}`` result into a list of (real, imag) pairs."""
+    return _as_responses(result.get("Gr"), result.get("Gi"))
+
+
 def _response_summary(freq: list[float], real: list[float], imag: list[float]) -> dict[str, Any]:
     points = min(len(freq), len(real), len(imag))
     mag_db: list[float] = []
