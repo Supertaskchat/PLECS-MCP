@@ -172,6 +172,16 @@ def test_diagnose_known_and_unknown():
     assert "[analysis-name]" in with_hint("Cannot find analysis named 'x'")
 
 
+def test_diagnose_cscript_compilation():
+    message = "Error(s) in component 'leg_test/PWM' during compilation of 'Code declarations'."
+    found = diagnose(message)
+    assert found and found["kind"] == "cscript-compile"
+    steps = " ".join(found["next_steps"])
+    assert "plecs_get" in steps
+    assert "Diagnostics" in steps
+    assert "[cscript-compile]" in with_hint(message)
+
+
 @pytest.mark.asyncio
 async def test_docs_resources_are_served():
     async with Client(mcp) as client:
@@ -181,10 +191,13 @@ async def test_docs_resources_are_served():
         assert "plecs://docs/gotchas" in uris
         content = await client.read_resource("plecs://docs/rpc")
         gotchas = await client.read_resource("plecs://docs/gotchas")
+        errors = await client.read_resource("plecs://docs/errors")
     text = content[0].text if hasattr(content[0], "text") else str(content[0])
     trap_text = gotchas[0].text if hasattr(gotchas[0], "text") else str(gotchas[0])
+    error_text = errors[0].text if hasattr(errors[0], "text") else str(errors[0])
     assert "plecs.simulate" in text
     assert "getCursorData" in trap_text
+    assert "C-Script compilation errors" in error_text
     assert "getCircuitBitmap" in trap_text
     assert "SaveTraces" in trap_text
     assert "ScriptName" in trap_text

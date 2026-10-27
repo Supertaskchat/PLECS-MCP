@@ -496,6 +496,8 @@ def plecs_get(path: str, parameter: str | None = None) -> dict[str, Any]:
     """Read a component/model parameter (model params too, e.g. "TimeSpan").
 
     Values come back as strings; without ``parameter`` a dict of all parameters is returned.
+    For a C-Script component this includes Declarations, StartFcn, OutputFcn, UpdateFcn,
+    DerivativeFcn and TerminateFcn, which is the first step after a compilation error.
     """
     params: list[Any] = [path] if parameter is None else [path, parameter]
     return _call("plecs.get", params)

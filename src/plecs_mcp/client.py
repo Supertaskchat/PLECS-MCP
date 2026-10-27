@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -62,14 +63,17 @@ class PlecsRpcError(PlecsError):
         -32000: "server error (batch/notification are not supported)",
     }
 
-    def __init__(self, method: str, code: int, message: str) -> None:
+    def __init__(self, method: str, code: int, message: str, data: Any = None) -> None:
         self.method = method
         self.code = code
         self.message = message
+        self.data = data
         hint = self.HINTS.get(code)
         text = f"{method} failed [{code}]: {message}"
         if hint and hint not in message:
             text += f" ({hint})"
+        if data not in (None, "", [], {}):
+            text += "\nDetails: " + json.dumps(data, ensure_ascii=False, default=str)
         super().__init__(text)
 
 
@@ -124,17 +128,22 @@ class PlecsClient:
             )
 
         if response.status_code != 200:
-            raise PlecsError(f"{method} failed: HTTP {response.status_code}: {response.text[:500]}")
+            raise PlecsError(f"{method} failed: HTTP {response.status_code}: {response.text}")
 
         try:
             body = response.json()
         except ValueError as exc:
-            raise PlecsError(f"{method} failed: response is not JSON: {response.text[:500]}") from exc
+            raise PlecsError(f"{method} failed: response is not JSON: {response.text}") from exc
 
         error = body.get("error")
         if error:
             logger.warning("%s returned %s: %s", method, error.get("code"), error.get("message"))
-            raise PlecsRpcError(method, int(error.get("code", 0)), str(error.get("message", "")))
+            raise PlecsRpcError(
+                method,
+                int(error.get("code", 0)),
+                str(error.get("message", "")),
+                error.get("data"),
+            )
         return body.get("result")
 
     @contextmanager

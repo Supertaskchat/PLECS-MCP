@@ -8,6 +8,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from plecs_mcp import library, modelops, server, tasks
+from plecs_mcp.client import PlecsRpcError
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"payload"
 
@@ -138,6 +139,28 @@ def test_clone_preserves_crlf(tmp_path: Path):
     target = tmp_path / "copy.plecs"
     modelops.clone_model(source, target)
     assert target.read_bytes() == original.encode("utf-8")
+
+
+def test_rpc_error_preserves_full_message_and_data():
+    message = "Simulation error: line 1\n" + ("detail " * 300) + "\nline 3"
+    exc = PlecsRpcError("plecs.simulate", -34000, message, {"diagnostics": ["a" * 200]})
+    text = str(exc)
+    assert message in text
+    assert "diagnostics" in text
+    assert len(text) > len(message)
+
+
+def test_mcp_forwards_long_rpc_error(monkeypatch):
+    message = "Simulation error: first line\n" + ("diagnostic line\n" * 120)
+
+    class FakeClient:
+        def call(self, *args, **kwargs):
+            raise PlecsRpcError("plecs.simulate", -34000, message)
+
+    monkeypatch.setattr(server, "get_client", lambda *args, **kwargs: FakeClient())
+    with pytest.raises(ToolError) as excinfo:
+        server.plecs_simulate("m", summary=True)
+    assert message in str(excinfo.value)
 
 
 def test_webserver_rejects_bare_cursor_index():

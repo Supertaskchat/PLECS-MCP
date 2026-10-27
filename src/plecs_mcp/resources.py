@@ -91,6 +91,32 @@ Gain crossover and phase margin are only meaningful for loop-gain AC sweeps.
 | `cannot reach PLECS` | RPC disabled or PLECS not running | `plecs_connect()` (auto-starts) |
 | `refusing to overwrite` | file exists | pass `overwrite=true` |
 | `outside PLECS_MCP_ALLOWED_ROOTS` | write guard | write under the output dir |
+
+## Error payloads
+
+MCP forwards the complete JSON-RPC `error.message` and any `error.data` verbatim; long and
+multi-line messages are not truncated. If PLECS only puts a summary in the RPC payload, MCP
+cannot reconstruct GUI-only details.
+
+## C-Script compilation errors
+
+The RPC error contains only the summary, for example:
+
+```
+Error(s) in component 'leg_test/PWM' during compilation of 'Code declarations'.
+```
+
+Full Clang diagnostics (file, line, column, message) are shown in the PLECS Diagnostics
+dialog and are not returned over RPC. To continue without GUI access:
+
+1. `plecs_get("<model>/<component>")` and inspect `Declarations`, `StartFcn`, `OutputFcn`,
+   `UpdateFcn`, `DerivativeFcn`, `TerminateFcn`.
+2. Check `#include` paths and header names, macros, port/state indices, sample time and
+   direct feedthrough.
+3. Optionally run `cc -fsyntax-only` as a pure C syntax pre-check (it cannot reproduce
+   PLECS macros or solver semantics).
+4. If the summary is insufficient, ask the user to paste the Diagnostics contents or a
+   screenshot.
 """,
     ),
     "gotchas": (

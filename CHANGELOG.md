@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [0.2.1] - 2026-10-27
+
+### Added
+
+- `plecs_diagnose` now recognises C-Script compilation failures (`during compilation of`) and
+  returns concrete next steps: read the component code segments with `plecs_get`, check includes,
+  macros, indices and sample time, and explain that full Clang details live in the GUI Diagnostics
+  dialog.
+- `plecs_get` documentation calls out the C-Script code fields (`Declarations`, `StartFcn`,
+  `OutputFcn`, `UpdateFcn`, `DerivativeFcn`, `TerminateFcn`).
+- `PlecsRpcError` now preserves JSON-RPC `error.data` as well as the full `error.message`;
+  non-200/JSON HTTP error bodies are no longer truncated.
+- `plecs://docs/errors` documents that all RPC error payloads are forwarded verbatim, and the
+  RPC summary vs GUI Diagnostics boundary for C-Script.
+
+### Tests
+
+- 121 tests, including the C-Script compilation diagnose rule and full error-payload forwarding.
+
 ## [0.2.0] - 2026-10-27
 
 ### Added

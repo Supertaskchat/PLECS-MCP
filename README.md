@@ -310,6 +310,11 @@ and a second `simulate` still waits for the first. The client mirrors that:
   can close other open models; `plecs_run_script` snapshots and reports them as `closed_models`.
 - Script names are **not** exposed by `getModelTree`; read the `Script { Name "..." }` block in the
   `.plecs` file (or search it with `plecs_scan`) before calling `plecs_run_script`.
+- All JSON-RPC error messages are forwarded **verbatim** (including multi-line text and any
+  `error.data`); MCP does not truncate them. C-Script compilation errors are special only because
+  PLECS itself sends a **summary** (component + phase); full Clang details are only in the PLECS
+  Diagnostics dialog. Use `plecs_get(model/component)` to inspect the code segments and
+  `plecs_diagnose` for next steps, or ask the user for the Diagnostics contents.
 - `plecs_webserver` command arguments differ: `getScope*` take a scope path, `getCircuitBitmap`
   takes the **model name**, and `getCursorData` takes `[scope, {"Index": 0}]` (a bare integer is
   rejected). `plecs_scope("SaveTraces", ...)` requires simulation data in the scope; a scope that
@@ -388,10 +393,10 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 118 tests
+.venv/bin/python -m pytest -q      # 121 tests
 ```
 
-Current release: **0.2.0** — see [CHANGELOG.md](CHANGELOG.md).
+Current release: **0.2.1** — see [CHANGELOG.md](CHANGELOG.md).
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
   plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,

@@ -58,6 +58,17 @@ RULES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         ("Read the Name properties from plecs_get_model_tree(model_path, summary=True).",),
     ),
     (
+        "during compilation of",
+        "cscript-compile",
+        "A C-Script block failed to compile.",
+        (
+            "Read the component code with plecs_get('<model>/<component>') and inspect Declarations, StartFcn, OutputFcn, UpdateFcn and TerminateFcn.",
+            "Check #include paths and header names, macros, types, sample time and direct feedthrough.",
+            "The RPC error contains only this summary; full Clang diagnostics are in the PLECS Diagnostics dialog.",
+            "Without GUI access, ask the user to paste the Diagnostics details, or run cc -fsyntax-only as a syntax pre-check.",
+        ),
+    ),
+    (
         "invalid scope path",
         "scope-path",
         "The scope path does not exist in the open model.",
