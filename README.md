@@ -156,6 +156,7 @@ PLECS RPC is localhost-only, so the MCP server and PLECS must run on the same ma
 | `plecs_batch` | any | Several RPC calls in one tool call, per-call errors inline |
 | `plecs_overview` | tree + get + statistics | One-call model briefing (solver, analyses, scopes, outports, scripts) |
 | `plecs_validate` | tree + get + `.plecs` graph | Structural and connection pre-flight checks (errors/warnings/diagnostics) |
+| `plecs_layout_check` | `webserver getCircuitBitmap` | Geometry: overlapping component boxes, diagonal wires, wires drawn across a device |
 | `plecs_capture` | `webserver getScopeBitmap` | Scope screenshot as an **inline PNG** |
 | `plecs_plot` | simulate / analyze | Waveform or Bode PNG — **PLECS bitmap by default**, matplotlib fallback |
 | `plecs_submit` / `plecs_task` / `plecs_task_result` / `plecs_tasks` | simulate/analyze/codegen | Background tasks with polling |
@@ -318,9 +319,14 @@ and a second `simulate` still waits for the first. The client mirrors that:
   Diagnostics dialog. Use `plecs_get(model/component)` to inspect the code segments and
   `plecs_diagnose` for next steps, or ask the user for the Diagnostics contents.
 - `plecs_validate` graph checks are static: they cover component references, subsystem ports,
-  C-Script port/code indices and top-level Output indices. Built-in component terminal counts and
-  geometric overlap are not available in `.plecs`, so PLECS Diagnostics remains authoritative for
-  those cases.
+  C-Script port/code indices and top-level Output indices. Built-in component terminal counts are
+  not available in `.plecs`, so PLECS Diagnostics remains authoritative for those cases.
+- `plecs_layout_check` uses the bounding box per component that `getCircuitBitmap` returns, plus
+  `Position`/`Points` from the text. It reports `LAYOUT-001` (error: two component boxes
+  intersect), `LAYOUT-002` (warning: diagonal wire segment) and `LAYOUT-003` (info: a wire drawn
+  across a device). Crossings are cosmetic - PLECS connects only through explicit connections -
+  and overlay blocks (`HeatSink`, `Goto`, `From`) are excluded because PLECS ships demos that
+  draw them on top of devices. The implicit last hop from a corner to a terminal is not checked.
 - `plecs_webserver` command arguments differ: `getScope*` take a scope path, `getCircuitBitmap`
   takes the **model name**, and `getCursorData` takes `[scope, {"Index": 0}]` (a bare integer is
   rejected). `plecs_scope("SaveTraces", ...)` requires simulation data in the scope; a scope that
@@ -406,15 +412,15 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 143 tests
+.venv/bin/python -m pytest -q      # 153 tests
 ```
 
-Current release: **0.3.1** — see [CHANGELOG.md](CHANGELOG.md).
+Current release: **0.4.0** — see [CHANGELOG.md](CHANGELOG.md).
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
   plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,
   sweep-result post-processing, image externalisation, task age ordering, CRLF round-trip
-- Surface: all 44 tools registered/documented; destructive tools need confirmation; batch/limits/guards
+- Surface: all 45 tools registered/documented; destructive tools need confirmation; batch/limits/guards
 - Integration: when `127.0.0.1:1080` is reachable, exercises connect/load/tree/get/simulate/analyze/
   summary/CSV/capture/plot/tasks/check/compare/model_edit on `/tmp` copies of the bundled demos
   (user models are never touched)
@@ -443,7 +449,7 @@ src/plecs_mcp/plecsfile.py .plecs parser and structural editor
 src/plecs_mcp/modelops.py  model scan/clone
 src/plecs_mcp/artifacts.py codegen output + FMU metadata
 src/plecs_mcp/data.py      local metrics/FFT/THD
-src/plecs_mcp/server.py    44 MCP tools + 6 resources
+src/plecs_mcp/server.py    45 MCP tools + 6 resources
 examples/quickstart.py     end-to-end smoke test
 tests/                     unit + surface + integration
 ```

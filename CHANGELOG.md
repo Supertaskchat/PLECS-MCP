@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.0] - 2026-10-27
+
+### Added
+
+- `plecs_layout_check(model_name, include_wires=True, margin=3.0)`: geometry check for a model
+  that is open in PLECS. It combines the per-component bounding boxes returned by
+  `plecs.webserver getCircuitBitmap` with `Position`/`Points` from the `.plecs` text and reports
+  `LAYOUT-001` (error: two component boxes intersect), `LAYOUT-002` (warning: diagonal wire
+  segment) and `LAYOUT-003` (info: a wire drawn across a device).
+
+### Verified
+
+- Wire polylines are read through nested `Branch` nodes: PLECS stores one vertex per node, and
+  all 27,377 connections in the 239 bundled files use only orthogonal segments.
+- 92 bundled demos produce no `LAYOUT-001`/`LAYOUT-002`; overlay blocks (`HeatSink`, `Goto`,
+  `From`) are excluded because PLECS ships demos that draw them over devices. An injected
+  overlap and an injected crossing wire are both detected.
+
 ## [0.3.1] - 2026-10-27
 
 ### Added

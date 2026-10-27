@@ -5,6 +5,7 @@ from plecs_mcp.server import mcp
 
 EXPECTED = {
     "plecs_overview",
+    "plecs_layout_check",
     "plecs_validate",
     "plecs_capture",
     "plecs_plot",

@@ -57,6 +57,7 @@ from . import data as data_mod
 from . import library as library_mod
 from . import library_text as library_text_mod
 from . import modelops
+from . import layout as layout_mod
 from .model_graph import validate_model_file
 from . import plecsfile
 from . import plotting
@@ -1139,6 +1140,53 @@ def plecs_overview(model_name: str) -> dict[str, Any]:
         "outports": outports_from_tree(tree),
         "scripts": plecsfile.script_names(path),
     }
+
+
+@mcp.tool(name="plecs_layout_check", annotations={"readOnlyHint": True})
+def plecs_layout_check(
+    model_name: str,
+    include_wires: bool = True,
+    margin: float = 3.0,
+) -> dict[str, Any]:
+    """Check schematic geometry of a model that is open in PLECS.
+
+    Uses the bounding box per component from ``plecs.webserver getCircuitBitmap``
+    plus ``Position``/``Points`` from the ``.plecs`` text, and reports only what is
+    certain: ``LAYOUT-001`` (error) two component boxes intersect, ``LAYOUT-002``
+    (warning) a wire polyline has a diagonal segment, ``LAYOUT-003`` (info) a wire
+    is drawn across a component that is not one of its endpoints. A crossing is
+    cosmetic - PLECS connects only through explicit connections - but it makes the
+    schematic hard to read.
+
+    Top-level schematic only; ``margin`` absorbs the ~2 unit rounding between
+    schematic coordinates and rendered pixels.
+    """
+    path = _model_path(model_name)
+    text = plecsfile.read_text(path)
+    result, lost = _scope_call("getCircuitBitmap", [model_name])
+    components = result.get("components") if isinstance(result, dict) else None
+    if not isinstance(components, dict):
+        raise ToolError(
+            f"getCircuitBitmap returned no component geometry for {model_name!r}; "
+            "make sure the model is loaded in PLECS"
+        )
+    findings, info = layout_mod.check_layout(
+        text, components, include_wires=include_wires, margin=margin
+    )
+    payload: dict[str, Any] = {
+        "ok": not any(item["severity"] == "error" for item in findings),
+        "model": model_name,
+        "path": path,
+        "findings": findings,
+        "info": {**info, "margin": margin, "include_wires": include_wires},
+    }
+    if lost:
+        payload["closed_models"] = lost
+        payload["warning"] = (
+            "PLECS closed other open models while rendering the circuit bitmap; "
+            "reload them with plecs_load(filename)"
+        )
+    return _with_closed_models(payload, lost)
 
 
 @mcp.tool(name="plecs_validate", annotations={"readOnlyHint": True})

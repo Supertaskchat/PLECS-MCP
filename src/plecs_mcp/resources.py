@@ -164,6 +164,12 @@ dialog and are not returned over RPC. To continue without GUI access:
   `Resistor` is `up`), and an unrotated device forces wires to bend or overlap.
 - Rotating a placed component invalidates explicit `Points` on its connections; remove them
   (re-`connect` without `points`) so PLECS re-routes orthogonally.
+- `plecs_layout_check(model)` turns `getCircuitBitmap` boxes plus `Position`/`Points` into
+  findings: `LAYOUT-001` (error) components overlap, `LAYOUT-002` (warning) a wire segment is
+  diagonal, `LAYOUT-003` (info) a wire is drawn across a device. Crossings are cosmetic - PLECS
+  connects only through explicit connections - and overlay blocks (`HeatSink`, `Goto`, `From`)
+  are skipped. Wires are read through nested `Branch` nodes (one vertex per node), and the
+  implicit corner-to-terminal hop is not checked.
 - Base64 images are written to `save_to` or `PLECS_MCP_OUTPUT_DIR`; never inline.
 
 ## plecs_scope
