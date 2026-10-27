@@ -172,6 +172,13 @@ def test_diagnose_known_and_unknown():
     assert "[analysis-name]" in with_hint("Cannot find analysis named 'x'")
 
 
+def test_diagnose_connection_errors():
+    found = diagnose("Cannot create connection to terminal 2 of 'model/Ctrl'.")
+    assert found and found["kind"] == "connection-terminal"
+    found = diagnose("Unconnected terminals overlapped by other elements were found.")
+    assert found and found["kind"] == "unconnected-terminals"
+
+
 def test_diagnose_cscript_compilation():
     message = "Error(s) in component 'leg_test/PWM' during compilation of 'Code declarations'."
     found = diagnose(message)

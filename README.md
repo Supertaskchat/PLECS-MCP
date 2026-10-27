@@ -6,6 +6,8 @@ Highlights:
 
 - One MCP tool per RPC method (22/22 on PLECS 5.0.6), plus `plecs_rpc` and `plecs_batch` escape hatches
 - `plecs_run_script` is verified: `[model, {"ScriptName": name}]`; script names are listed by `plecs_overview`
+- `plecs_validate` now runs a static connection graph check: missing components, subsystem ports,
+  C-Script terminal ranges, top-level Output indices and C-Script code indices
 - Argument preflight and `plecs://docs/gotchas` return corrected shapes for common mistakes instead of
   leaving the agent to guess
 - `plecs_connect` starts PLECS automatically (macOS / Windows / Linux) when the RPC port is closed
@@ -153,7 +155,7 @@ PLECS RPC is localhost-only, so the MCP server and PLECS must run on the same ma
 | `plecs_crash` | `plecs.crash` | Terminates PLECS; `confirm=true` |
 | `plecs_batch` | any | Several RPC calls in one tool call, per-call errors inline |
 | `plecs_overview` | tree + get + statistics | One-call model briefing (solver, analyses, scopes, outports, scripts) |
-| `plecs_validate` | tree + get | Structural pre-flight checks (errors/warnings) |
+| `plecs_validate` | tree + get + `.plecs` graph | Structural and connection pre-flight checks (errors/warnings/diagnostics) |
 | `plecs_capture` | `webserver getScopeBitmap` | Scope screenshot as an **inline PNG** |
 | `plecs_plot` | simulate / analyze | Waveform or Bode PNG — **PLECS bitmap by default**, matplotlib fallback |
 | `plecs_submit` / `plecs_task` / `plecs_task_result` / `plecs_tasks` | simulate/analyze/codegen | Background tasks with polling |
@@ -315,6 +317,10 @@ and a second `simulate` still waits for the first. The client mirrors that:
   PLECS itself sends a **summary** (component + phase); full Clang details are only in the PLECS
   Diagnostics dialog. Use `plecs_get(model/component)` to inspect the code segments and
   `plecs_diagnose` for next steps, or ask the user for the Diagnostics contents.
+- `plecs_validate` graph checks are static: they cover component references, subsystem ports,
+  C-Script port/code indices and top-level Output indices. Built-in component terminal counts and
+  geometric overlap are not available in `.plecs`, so PLECS Diagnostics remains authoritative for
+  those cases.
 - `plecs_webserver` command arguments differ: `getScope*` take a scope path, `getCircuitBitmap`
   takes the **model name**, and `getCursorData` takes `[scope, {"Index": 0}]` (a bare integer is
   rejected). `plecs_scope("SaveTraces", ...)` requires simulation data in the scope; a scope that
@@ -393,10 +399,10 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 121 tests
+.venv/bin/python -m pytest -q      # 140 tests
 ```
 
-Current release: **0.2.1** — see [CHANGELOG.md](CHANGELOG.md).
+Current release: **0.3.0** — see [CHANGELOG.md](CHANGELOG.md).
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
   plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,

@@ -150,6 +150,24 @@ RULES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "cannot create connection to terminal",
+        "connection-terminal",
+        "A connection references a terminal that the component does not expose.",
+        (
+            "Run plecs_validate(model_name, include_connections=True) for the static graph/diagnostic view.",
+            "Check C-Script NumInputs/NumOutputs, subsystem Terminal order, and top-level Output Index.",
+        ),
+    ),
+    (
+        "unconnected terminals overlapped",
+        "unconnected-terminals",
+        "PLECS found unconnected terminals, or terminals covered by other schematic elements.",
+        (
+            "Use View > Show highlighted in PLECS to locate the terminals.",
+            "plecs_validate checks component/terminal indices but cannot detect geometric overlap.",
+        ),
+    ),
+    (
         "invalid path",
         "path-kind",
         "The value is not the kind of path this method expects.",

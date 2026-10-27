@@ -98,6 +98,28 @@ MCP forwards the complete JSON-RPC `error.message` and any `error.data` verbatim
 multi-line messages are not truncated. If PLECS only puts a summary in the RPC payload, MCP
 cannot reconstruct GUI-only details.
 
+## Static connection checks
+
+`plecs_validate(..., include_connections=True)` parses the `.plecs` text and reports structured
+diagnostics such as `CONN-001` (missing component), `CONN-006` (subsystem/Output port),
+`CONN-007` (C-Script terminal range), `CSCRIPT-007` (InputSignal index) and `SUB-005`
+(subsystem schematic missing).
+
+The checker only reports what the text can prove:
+
+- C-Script ports declared as `-1` (inherited) or as expressions such as
+  `"[1 num_channels]"` are skipped and listed in `info.connections.unchecked_cscript_ports`;
+  `NumInputs "0"` means no input port.
+- Encrypted subsystems are treated as opaque: no `SUB-005`.
+- Library/masked component templates legitimately repeat variant names, so duplicate-name
+  checks are skipped inside them.
+- Top-level outport pairing (`CONN-006`/`CONN-008`) only runs when the root schematic has
+  `Output` blocks; library files and RT Box data-logging models declare bare outport terminals.
+- Connectors that only carry drawing `Points` are not endpoints.
+
+Built-in component terminal counts are not present in `.plecs`, so those ranges stay unchecked;
+geometric overlap still requires PLECS Diagnostics.
+
 ## C-Script compilation errors
 
 The RPC error contains only the summary, for example:

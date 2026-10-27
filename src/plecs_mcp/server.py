@@ -57,6 +57,7 @@ from . import data as data_mod
 from . import library as library_mod
 from . import library_text as library_text_mod
 from . import modelops
+from .model_graph import validate_model_file
 from . import plecsfile
 from . import plotting
 from .diagnose import diagnose, with_hint
@@ -1141,8 +1142,18 @@ def plecs_overview(model_name: str) -> dict[str, Any]:
 
 
 @mcp.tool(name="plecs_validate", annotations={"readOnlyHint": True})
-def plecs_validate(model_name: str) -> dict[str, Any]:
-    """Structural sanity check before simulating (solver/time settings, outports, analyses)."""
+def plecs_validate(
+    model_name: str,
+    include_connections: bool = True,
+    include_code: bool = True,
+) -> dict[str, Any]:
+    """Structural sanity check before simulating.
+
+    Checks solver/time settings, outports, analyses, and (by default) the native
+    ``.plecs`` connection graph: component references, subsystem ports, C-Script
+    terminal ranges, top-level Output indices, and C-Script code indices.
+    Warning-level findings do not change ``ok``.
+    """
     path = _model_path(model_name)
     errors: list[str] = []
     warnings: list[str] = []
@@ -1182,12 +1193,34 @@ def plecs_validate(model_name: str) -> dict[str, Any]:
         if not name:
             errors.append("an analysis has an empty Name property")
 
+    diagnostics: list[dict[str, Any]] = []
+    connection_info: dict[str, Any] = {}
+    if include_connections:
+        try:
+            graph, graph_diagnostics = validate_model_file(
+                model_name, path, include_code=include_code
+            )
+            for diagnostic in graph_diagnostics:
+                diagnostics.append(diagnostic.as_dict())
+                target = errors if diagnostic.severity == "error" else warnings
+                target.append(f"[{diagnostic.code}] {diagnostic.message}")
+            connection_info = {
+                "schematics": len(graph.schematics),
+                "components": sum(len(item.components) for item in graph.schematics),
+                "connections": sum(len(item.connections) for item in graph.schematics),
+                "unchecked_terminal_types": graph.unchecked_types(),
+                "unchecked_cscript_ports": graph.unchecked_cscript_ports(),
+            }
+        except (OSError, ValueError) as exc:
+            warnings.append(f"connection checks skipped: {exc}")
+
     return {
         "ok": not errors,
         "model": model_name,
         "path": path,
         "errors": errors,
         "warnings": warnings,
+        "diagnostics": diagnostics,
         "info": {
             "time_span": time_span,
             "max_step": max_step,
@@ -1196,6 +1229,7 @@ def plecs_validate(model_name: str) -> dict[str, Any]:
             "analyses": names,
             "scopes": summary["scopes"],
             "scripts": plecsfile.script_names(path),
+            "connections": connection_info,
         },
     }
 

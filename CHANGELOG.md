@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here.
 
+## [0.3.0] - 2026-10-27
+
+### Added
+
+- `plecs_validate(..., include_connections=True, include_code=True)` now builds a scope-aware
+  graph from the native `.plecs` text and reports structured diagnostics: missing components,
+  cross-schematic references, duplicate component names, subsystem port ranges/directions,
+  C-Script terminal ranges/directions, top-level Output/Terminal indices, malformed branches,
+  and C-Script code index warnings (`InputSignal`, `OutputSignal`, states, `ParamRealData`).
+- `plecs_diagnose` recognises `Cannot create connection to terminal` and unconnected-terminal
+  errors and points to `plecs_validate`.
+- Docs/resources describe the static checker limits: built-in terminal counts and geometric
+  overlap remain PLECS Diagnostics territory.
+
+### Fixed
+
+- Connection checks no longer guess: C-Script ports declared with `-1` or expressions
+  (library templates) are skipped and listed in `info.connections.unchecked_cscript_ports`,
+  while `NumInputs "0"` correctly means zero input ports.
+- Encrypted subsystems no longer report `SUB-005`, points-only branch stubs no longer report
+  `CONN-003`, duplicate-name checks are skipped inside masked library templates, and top-level
+  outport pairing only runs when the model has `Output` blocks.
+- `CSCRIPT-004` accepts both DirectFeedthrough conventions (one entry per port or per channel).
+
+### Tests
+
+- Added `tests/test_model_graph.py` plus diagnose/validate integration coverage (140 tests);
+  all 239 bundled `.plecs` files (models, demos, component and target-support libraries) parse
+  with zero connection diagnostics.
+
 ## [0.2.1] - 2026-10-27
 
 ### Added
