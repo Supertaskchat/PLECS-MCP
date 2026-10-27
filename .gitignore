@@ -11,3 +11,7 @@ dist/
 # Local design notes / research artifacts are not part of the package
 docs/
 doc/
+
+# macOS Finder metadata
+.DS_Store
+ 
