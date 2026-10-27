@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [0.3.1] - 2026-10-27
+
+### Added
+
+- `plecs_model_edit` now controls orientation: `add_component` accepts `direction`
+  (`right|left|up|down`) and `flipped` (`on|off`), and two new operations rotate/move placed
+  components (`set_orientation`, `set_position`). Templates carry their own default direction
+  (a `Resistor` is `up`), so passing `direction` at placement time is what keeps a horizontal
+  power path horizontal.
+
+### Documented
+
+- PLECS RPC cannot modify `Direction`, `Flipped` or `Position` (`plecs.set` returns
+  `Unknown parameter` for each), so all layout is text-level through `plecs_model_edit` and
+  needs a reload. Rotating a placed component invalidates explicit `Points`; drop that
+  connection and re-`connect` so PLECS re-routes.
+
 ## [0.3.0] - 2026-10-27
 
 ### Added

@@ -257,3 +257,39 @@ def test_sign_and_codegen_refuse_install_dirs(monkeypatch):
         server.plecs_sign("/Applications/PLECS 5.0.app/model.plecs")
     with pytest.raises(ToolError, match="refusing to write inside"):
         server.plecs_codegen("m", output_dir="/Applications/PLECS 5.0.app/out")
+
+
+def test_model_edit_orientation_ops(tmp_path: Path):
+    """Rotation must be expressible through the tool, not hand-edited text."""
+    text = '''Plecs {
+  Name          "m"
+  Version       "5.0"
+  Schematic {
+    Component {
+      Type          Resistor
+      Name          "R1"
+      Show          on
+      Position      [0, 0]
+      Direction     right
+      Flipped       off
+    }
+  }
+}
+'''
+    source = tmp_path / "m.plecs"
+    source.write_text(text, encoding="utf-8")
+    target = tmp_path / "out.plecs"
+    result = server.plecs_model_edit(
+        str(source),
+        [
+            {"op": "set_orientation", "component": "R1", "direction": "up", "flipped": "on"},
+            {"op": "set_position", "component": "R1", "position": [30, 40]},
+        ],
+        output=str(target),
+        validate=False,
+    )
+    edited = target.read_text(encoding="utf-8")
+    assert result["applied"][0]["ok"] is True
+    assert "Direction     up" in edited
+    assert "Flipped       on" in edited
+    assert "Position      [30, 40]" in edited

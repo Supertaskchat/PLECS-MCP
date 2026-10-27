@@ -151,7 +151,19 @@ dialog and are not returned over RPC. To continue without GUI access:
   `["scope_path"]`
 - `getCursorData`: `["scope_path"]` or `["scope_path", {"Index": 0}]`.
   A bare integer (`["scope_path", 0]`) is rejected as invalid parameters.
-- `getCircuitBitmap`: `["model_name"]` — **not** a `.plecs` file path.
+- `getCircuitBitmap`: `["model_name"]` — **not** a `.plecs` file path. It also returns
+  `components.<name>.dimensions` (`left`/`top`/`width`/`height`), which is the cheapest way to
+  check spacing and overlap without eyeballing the PNG.
+
+## Layout and orientation
+
+- `plecs.set` **cannot** change `Direction`, `Flipped` or `Position`: PLECS reports
+  `Unknown parameter`. Layout lives only in the `.plecs` text, so use `plecs_model_edit`
+  (`direction`/`flipped` on `add_component`, or `set_orientation` / `set_position`) and reload.
+- Place components with the direction they need: templates carry their own default (a
+  `Resistor` is `up`), and an unrotated device forces wires to bend or overlap.
+- Rotating a placed component invalidates explicit `Points` on its connections; remove them
+  (re-`connect` without `points`) so PLECS re-routes orthogonally.
 - Base64 images are written to `save_to` or `PLECS_MCP_OUTPUT_DIR`; never inline.
 
 ## plecs_scope

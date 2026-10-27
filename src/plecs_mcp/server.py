@@ -1682,12 +1682,20 @@ def plecs_model_edit(
     Operations (applied in order)::
 
         {"op": "add_component", "type": "Resistor", "name": "R2",
-         "position": [400, 200], "parameters": {"R": "10"}}
+         "position": [400, 200], "direction": "right", "flipped": "off",
+         "parameters": {"R": "10"}}
         {"op": "remove_component", "name": "R2"}
         {"op": "set_parameter", "component": "R2", "variable": "R", "value": "22"}
+        {"op": "set_orientation", "component": "R2", "direction": "up", "flipped": "on"}
+        {"op": "set_position", "component": "R2", "position": [400, 240]}
         {"op": "connect", "source": "V_dc", "source_terminal": 1,
          "target": "R2", "target_terminal": 1, "points": [[110, 200], [400, 200]]}
         {"op": "add_outport", "name": "Vout", "position": [600, 200]}
+
+    ``direction`` is ``right``/``left``/``up``/``down`` and ``flipped`` is ``on``/``off``:
+    set them when the component is added (or use ``set_orientation`` later) so the
+    terminal sides match the intended signal flow. Rotating a placed component
+    invalidates explicit ``Points``; drop them or re-run ``connect`` so PLECS re-routes.
 
     In-place editing requires ``confirm=true``, obeys the same write policy as other
     tools (allowed roots, no install dirs), and creates a ``.bak-<ms>`` backup; pass
@@ -1732,6 +1740,8 @@ def plecs_model_edit(
                     op["name"],
                     op.get("position"),
                     op.get("parameters") or {},
+                    direction=op.get("direction"),
+                    flipped=op.get("flipped"),
                 )
             elif kind == "remove_component":
                 text = plecsfile.remove_component(text, plecsfile.parse(text), op["name"])
@@ -1748,6 +1758,18 @@ def plecs_model_edit(
                     op["target"],
                     int(op["target_terminal"]),
                     op.get("points"),
+                )
+            elif kind == "set_orientation":
+                text = plecsfile.set_orientation(
+                    text,
+                    plecsfile.parse(text),
+                    op["component"],
+                    op.get("direction"),
+                    op.get("flipped"),
+                )
+            elif kind == "set_position":
+                text = plecsfile.set_position(
+                    text, plecsfile.parse(text), op["component"], op["position"]
                 )
             elif kind == "add_outport":
                 text = plecsfile.add_outport(

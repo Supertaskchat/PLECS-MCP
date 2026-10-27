@@ -183,6 +183,35 @@ def _set_entry(block: str, key: str, value: str) -> str:
     return block
 
 
+DIRECTIONS = ("right", "left", "up", "down")
+FLIPPED = ("on", "off")
+
+
+def _set_or_insert_entry(block: str, key: str, value: str) -> str:
+    """Replace a schematic entry, or insert it after Position/Name when absent."""
+    pattern = re.compile(rf"^(\s*{key}\s+).*$", re.MULTILINE)
+    if pattern.search(block):
+        return pattern.sub(rf"\g<1>{value}", block, count=1)
+    lines = block.splitlines()
+    anchor = 0
+    indent = "  "
+    for index, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not line.strip():
+            continue
+        if index == 0:
+            indent = " " * (len(line) - len(stripped)) + "  "
+            continue
+        if stripped.split(" ", 1)[0] in ("Position", "Name") or anchor:
+            anchor = index
+            if stripped.split(" ", 1)[0] == "Position":
+                break
+    if anchor == 0:
+        anchor = 1 if len(lines) > 1 else 0
+    lines.insert(anchor + 1, f"{indent}{key:<14}{value}")
+    return "\n".join(lines)
+
+
 def _set_parameter(block: str, variable: str, value: str) -> tuple[str, bool]:
     pattern = re.compile(
         rf'(Parameter\s*\{{[^{{}}]*?Variable\s+"{re.escape(variable)}"[^{{}}]*?Value\s+)"[^"]*"',
@@ -198,15 +227,69 @@ def render_from_template(
     position: list[int] | None,
     parameters: dict[str, str] | None,
     indent: str,
+    direction: str | None = None,
+    flipped: str | None = None,
 ) -> str:
     lines = _dedent(template.splitlines())
     block = _indent_lines(lines, indent)
     block = _set_entry(block, "Name", f'"{name}"')
     if position:
-        block = _set_entry(block, "Position", f"[{position[0]}, {position[1]}]")
+        block = _set_or_insert_entry(block, "Position", f"[{position[0]}, {position[1]}]")
+    if direction:
+        block = _set_or_insert_entry(block, "Direction", direction)
+    if flipped:
+        block = _set_or_insert_entry(block, "Flipped", flipped)
     for variable, value in (parameters or {}).items():
         block, _ = _set_parameter(block, variable, str(value))
     return block
+
+
+def _orientation_values(direction: str | None, flipped: str | bool | None) -> tuple[str | None, str | None]:
+    if direction is not None:
+        direction = str(direction).strip().lower()
+        if direction not in DIRECTIONS:
+            raise ValueError(f"direction must be one of {', '.join(DIRECTIONS)}; got {direction!r}")
+    if flipped is not None:
+        if isinstance(flipped, bool):
+            flipped = "on" if flipped else "off"
+        flipped = str(flipped).strip().lower()
+        if flipped not in FLIPPED:
+            raise ValueError(f"flipped must be 'on' or 'off'; got {flipped!r}")
+    return direction, flipped
+
+
+def set_orientation(
+    text: str,
+    root: Node,
+    component: str,
+    direction: str | None = None,
+    flipped: str | bool | None = None,
+) -> str:
+    """Rotate/mirror a placed component (``Direction`` + ``Flipped``)."""
+    direction, flipped = _orientation_values(direction, flipped)
+    if direction is None and flipped is None:
+        raise ValueError("set_orientation needs direction and/or flipped")
+    node = find_component(root, component)
+    if node is None:
+        raise ValueError(f"component {component!r} not found")
+    span = text[node.start : node.end]
+    if direction:
+        span = _set_or_insert_entry(span, "Direction", direction)
+    if flipped:
+        span = _set_or_insert_entry(span, "Flipped", flipped)
+    return text[: node.start] + span + text[node.end :]
+
+
+def set_position(text: str, root: Node, component: str, position: list[int] | tuple[int, int]) -> str:
+    """Move a placed component without touching its orientation or connections."""
+    if not isinstance(position, (list, tuple)) or len(position) != 2:
+        raise ValueError("position must be [x, y]")
+    node = find_component(root, component)
+    if node is None:
+        raise ValueError(f"component {component!r} not found")
+    span = text[node.start : node.end]
+    span = _set_or_insert_entry(span, "Position", f"[{int(position[0])}, {int(position[1])}]")
+    return text[: node.start] + span + text[node.end :]
 
 
 def _component_insert_offset(schematic: Node) -> int:
@@ -224,14 +307,19 @@ def add_component(
     name: str,
     position: list[int] | None,
     parameters: dict[str, str] | None = None,
+    direction: str | None = None,
+    flipped: str | bool | None = None,
 ) -> str:
     schematic = top_schematic(root)
     if schematic is None:
         raise ValueError("model has no top-level Schematic")
     if find_component(root, name) is not None:
         raise ValueError(f"component {name!r} already exists")
+    direction, flipped = _orientation_values(direction, flipped)
     indent = schematic.indent + "  "
-    block = render_from_template(template, name, position, parameters, indent)
+    block = render_from_template(
+        template, name, position, parameters, indent, direction=direction, flipped=flipped
+    )
     fragment = "\n" + block + "\n"
     return _insert(text, _component_insert_offset(schematic), fragment)
 

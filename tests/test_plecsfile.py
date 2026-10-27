@@ -1,3 +1,5 @@
+import pytest
+
 from plecs_mcp import plecsfile
 
 MODEL = '''Plecs {
@@ -124,3 +126,55 @@ def test_library_templates_extracts_types():
     templates = plecsfile.library_templates(lib)
     assert set(templates) == {"Resistor", "Inductor"}
     assert 'Type          Resistor' in templates["Resistor"]
+
+
+def test_set_orientation_and_position(tmp_path):
+    text = '''Plecs {
+  Name          "m"
+  Schematic {
+    Component {
+      Type          Resistor
+      Name          "R1"
+      Position      [10, 20]
+      Direction     right
+      Flipped       off
+    }
+  }
+}
+'''
+    root = plecsfile.parse(text)
+    rotated = plecsfile.set_orientation(text, root, "R1", direction="up", flipped="on")
+    assert "Direction     up" in rotated
+    assert "Flipped       on" in rotated
+    moved = plecsfile.set_position(text, plecsfile.parse(text), "R1", [40, 60])
+    assert "Position      [40, 60]" in moved
+    assert "Direction     right" in moved
+
+    with pytest.raises(ValueError):
+        plecsfile.set_orientation(text, root, "R1", direction="diagonal")
+    with pytest.raises(ValueError):
+        plecsfile.set_orientation(text, root, "R1")
+
+
+def test_add_component_honours_direction():
+    text = '''Plecs {
+  Name          "m"
+  Schematic {
+  }
+}
+'''
+    template = '''Component {
+  Type          Resistor
+  Name          "R"
+  Show          on
+  Position      [0, 0]
+  Direction     up
+  Flipped       off
+}'''
+    out = plecsfile.add_component(
+        text, plecsfile.parse(text), template, "R1", [50, 50],
+        direction="right", flipped=False,
+    )
+    assert "Direction     right" in out
+    assert "Flipped       off" in out
+    assert "Direction     up" not in out

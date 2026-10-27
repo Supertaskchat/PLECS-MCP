@@ -163,7 +163,7 @@ PLECS RPC is localhost-only, so the MCP server and PLECS must run on the same ma
 | `plecs_library_search` | `getModelTree(Components.plecs)` | Search the installed component library |
 | `plecs_scan` | – | Regex-search a `.plecs` file without opening it |
 | `plecs_model_clone` | – | Copy/rename/patch a model file, then load-validate |
-| `plecs_model_edit` | – | Structural edits: add/remove component, set parameter, wire, add outport |
+| `plecs_model_edit` | – | Structural edits: add/remove component, set parameter, rotate/move, wire, add outport |
 | `plecs_artifacts` | – | List codegen/FMU output files |
 | `plecs_fmu_info` | – | Read `modelDescription.xml` from an FMU |
 | `plecs_analyze_data` | – | Metrics + FFT/THD on a saved JSON result |
@@ -329,9 +329,13 @@ and a second `simulate` still waits for the first. The client mirrors that:
 - PLECS 5.0.6 closes **other open models** while serving `getScopeCsv`/`getScopeBitmap`. The
   `plecs_webserver` / `plecs_capture` responses report `closed_models` with a warning (and the
   server logs it); models are not auto-reloaded because that could discard unsaved changes.
-- `plecs_model_edit` handles structure (components/params/wires/outports) but does **not** do
-  automatic layout or route wires around obstacles; coordinates are caller-supplied. In-place
-  editing is subject to `PLECS_MCP_ALLOWED_ROOTS` and is refused inside install directories.
+- `plecs_model_edit` handles structure (components/params/wires/outports) and orientation
+  (`direction`/`flipped` when adding, `set_orientation`, `set_position`) but does **not** do
+  automatic layout or route wires around obstacles; coordinates are caller-supplied.
+  PLECS RPC cannot change `Direction`/`Flipped`/`Position` (`plecs.set` reports
+  `Unknown parameter`), so layout is text-level and needs a reload. Rotating a placed component
+  invalidates explicit `Points`; drop that connection and re-`connect`. In-place editing is
+  subject to `PLECS_MCP_ALLOWED_ROOTS` and is refused inside install directories.
 - Gain crossover/phase margin only make sense for loop-gain AC sweeps; other analysis kinds are labelled.
 - Auto-start picks the newest install for the **host** OS: macOS `/Applications/PLECS*.app`,
   Windows `%ProgramFiles%\Plexim\*\plecs.exe`, Linux `plecs` on `PATH` or `/opt/plecs*/plecs`.
@@ -373,7 +377,10 @@ plecs_plot(model, kind="waveform", renderer="matplotlib")   # only for overlays
 # structural model edit
 plecs_model_edit(path, confirm=True, operations=[
   {"op": "add_component", "type": "Resistor", "name": "R2",
-   "position": [400, 200], "parameters": {"R": "10"}},
+   "position": [400, 200], "direction": "right", "flipped": "off",
+   "parameters": {"R": "10"}},
+  {"op": "set_orientation", "component": "R2", "direction": "up", "flipped": "on"},
+  {"op": "set_position", "component": "R2", "position": [400, 240]},
   {"op": "connect", "source": "V_dc", "source_terminal": 1,
    "target": "R2", "target_terminal": 1},
   {"op": "add_outport", "name": "Vout", "position": [600, 200]}])
@@ -399,10 +406,10 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 140 tests
+.venv/bin/python -m pytest -q      # 143 tests
 ```
 
-Current release: **0.3.0** — see [CHANGELOG.md](CHANGELOG.md).
+Current release: **0.3.1** — see [CHANGELOG.md](CHANGELOG.md).
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
   plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,
