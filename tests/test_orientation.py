@@ -1,10 +1,8 @@
-"""Tests for the placement-orientation rules."""
-
-from pathlib import Path
+"""Tests for the corpus-measured placement conventions."""
 
 import pytest
 
-from plecs_mcp import orientation, plecsfile
+from plecs_mcp import orientation
 
 
 def test_terminal_one_side_follows_direction_and_flip():
@@ -28,91 +26,90 @@ def test_orientation_for_is_the_inverse():
     assert orientation.orientation_for("horizontal", "top") is None
 
 
-def _chain(flip_l: bool = False, flip_brk: bool = False) -> str:
-    def comp(kind, name, x, flip):
-        return f'''    Component {{
-      Type          {kind}
-      Name          "{name}"
-      Position      [{x}, 100]
-      Direction     right
-      Flipped       {"on" if flip else "off"}
-    }}
-'''
-    def wire(src, dst):
-        return f'''    Connection {{
-      Type          Wire
-      SrcComponent  "{src}"
-      SrcTerminal   2
-      DstComponent  "{dst}"
-      DstTerminal   1
-    }}
-'''
-    return (
-        'Plecs {\n  Name          "m"\n  Schematic {\n'
-        + comp("VoltageSource", "V", 100, False)
-        + comp("Inductor", "L", 200, flip_l)
-        + comp("Breaker", "B", 300, flip_brk)
-        + wire("V", "L")
-        + wire("L", "B")
-        + "  }\n}\n"
-    )
+def test_conventions_come_from_the_corpus():
+    horizontal = orientation.expected_for("Inductor", "right")
+    assert horizontal["side"] == "right"
+    assert horizontal["n"] >= 300 and horizontal["share"] >= 70
+    vertical = orientation.expected_for("Diode", "up")
+    assert vertical["side"] == "top"
+    assert orientation.expected_for("Resistor", "right") is None
+    assert orientation.expected_for("MosfetWithDiode", "right") is None
 
 
-def test_reading_order_accepts_a_left_to_right_chain():
-    assert orientation.check_orientation(text=_chain()) == []
-
-
-def test_reading_order_flags_a_reversed_part(tmp_path: Path):
-    findings = orientation.check_orientation(text=_chain(flip_l=True))
-    assert [item["component"] for item in findings] == ["L"]
-    assert findings[0]["code"] == "LAYOUT-004"
-    assert findings[0]["severity"] == "info"
-    assert findings[0]["actual"]["term1_side"] == "right"
-    assert findings[0]["expected"] == {"direction": "right", "flipped": "off"}
-
-
-def test_vertical_chain_expects_terminal_one_on_top():
-    text = '''Plecs {
+def _inductor(direction: str, flipped: str) -> str:
+    return f'''Plecs {{
   Name          "m"
-  Schematic {
-    Component {
+  Schematic {{
+    Component {{
       Type          Inductor
       Name          "L"
       Position      [100, 100]
-      Direction     up
-      Flipped       off
-    }
-    Component {
+      Direction     {direction}
+      Flipped       {flipped}
+    }}
+    Component {{
       Type          Breaker
       Name          "B"
-      Position      [100, 200]
-      Direction     up
+      Position      [200, 100]
+      Direction     left
       Flipped       off
-    }
-    Connection {
+    }}
+    Connection {{
       Type          Wire
       SrcComponent  "L"
       SrcTerminal   2
       DstComponent  "B"
       DstTerminal   1
+    }}
+  }}
+}}
+'''
+
+
+def test_horizontal_inductor_matching_the_corpus_is_clean():
+    assert orientation.check_orientation(text=_inductor("left", "off")) == []
+
+
+def test_horizontal_inductor_with_terminal_one_on_the_left_is_reported():
+    findings = orientation.check_orientation(text=_inductor("right", "off"))
+    assert [item["component"] for item in findings] == ["L"]
+    assert findings[0]["code"] == "LAYOUT-004"
+    assert findings[0]["severity"] == "info"
+    assert findings[0]["actual"]["term1_side"] == "left"
+    assert findings[0]["expected"] == {"direction": "left", "flipped": "off"}
+    assert findings[0]["convention"]["n"] > 0
+
+
+def test_vertical_diode_points_down_in_the_corpus():
+    text = '''Plecs {
+  Name          "m"
+  Schematic {
+    Component {
+      Type          Diode
+      Name          "D"
+      Position      [100, 100]
+      Direction     down
+      Flipped       off
     }
   }
 }
 '''
-    findings = orientation.check_orientation(text=text)
-    assert {item["component"] for item in findings} == {"L", "B"}
-    inductor = next(item for item in findings if item["component"] == "L")
-    assert inductor["actual"]["term1_side"] == "bottom"
-    assert inductor["expected"] == {"direction": "up", "flipped": "on"}
+    assert orientation.check_orientation(text=text) == []
+    flipped = text.replace("Direction     down", "Direction     up")
+    findings = orientation.check_orientation(text=flipped)
+    assert [item["component"] for item in findings] == ["D"]
+    assert findings[0]["expected"] == {"direction": "down", "flipped": "off"}
 
 
-def test_policy_override_replaces_reading_order():
-    text = _chain()
-    findings = orientation.check_orientation(text=text, policies={"Inductor": "right"})
+def test_project_policy_overrides_the_corpus():
+    findings = orientation.check_orientation(
+        text=_inductor("left", "off"), policies={"Inductor": "left"}
+    )
     assert [item["component"] for item in findings] == ["L"]
-    assert findings[0]["expected"]["flipped"] == "on"
+    assert findings[0]["expected"] == {"direction": "right", "flipped": "off"}
+    assert findings[0]["convention"]["n"] == 0
 
 
-def test_non_polar_parts_are_ignored():
-    text = _chain().replace("Type          Inductor", "Type          Resistor")
+def test_types_without_a_convention_are_silent():
+    text = _inductor("right", "off").replace("Type          Inductor", "Type          Resistor")
     assert orientation.check_orientation(text=text) == []

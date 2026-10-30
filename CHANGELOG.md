@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.4] - 2026-10-30
+
+### Changed
+
+- `LAYOUT-004` no longer encodes a hand-written "reading order" rule. The convention is now
+  measured from the 239 bundled models: horizontal power parts put terminal 1 on the right
+  (inductor 78% of 359, breaker 100% of 18), vertical passives and sources put it at the bottom
+  (capacitor 100% of 270, DC voltage source 100% of 181), vertical diodes and thyristors put it
+  on top (96% of 219, 77% of 30). Only pairs with at least 10 samples and 70% agreement are
+  checked, so a finding always means "the shipped models do it the other way". Replaying the
+  rule over the corpus now flags 111 parts in 23 of 239 models (9%) instead of 558 in 155 (65%).
+
 ## [0.4.3] - 2026-10-30
 
 ### Fixed

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plecs-mcp"
-version = "0.4.3"
+version = "0.4.4"
 description = "MCP server exposing the complete Plexim PLECS JSON-RPC interface"
 readme = "README.md"
 license = { text = "MIT" }

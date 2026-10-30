@@ -189,7 +189,11 @@ anywhere in the readable text, which is one of the mistakes PLECS reports as
   leaves the stale `Points` in place.
 - `plecs_layout_check(model)` turns `getCircuitBitmap` boxes plus `Position`/`Points` into
   findings: `LAYOUT-001` (error) components overlap, `LAYOUT-002` (warning) a wire segment is
-  diagonal, `LAYOUT-003` (info) a wire is drawn across a device. Crossings are cosmetic - PLECS
+  diagonal, `LAYOUT-003` (info) a wire is drawn across a device. With
+  `include_orientation=True` it adds `LAYOUT-004` (info), comparing each polar part against the
+  placement convention measured in the bundled models: horizontal -> terminal 1 on the right,
+  vertical passives/sources -> bottom, vertical diodes/thyristors -> top (`Direction`/`Flipped`
+  to apply is included). Off by default because it is a house style. Crossings are cosmetic - PLECS
   connects only through explicit connections - and overlay blocks (`HeatSink`, `Goto`, `From`)
   are skipped. Wires are read through nested `Branch` nodes (one vertex per node), and the
   implicit corner-to-terminal hop is not checked.

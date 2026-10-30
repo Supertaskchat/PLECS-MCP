@@ -326,10 +326,13 @@ and a second `simulate` still waits for the first. The client mirrors that:
   MCP reports `[plecs-crash]` with the Crashpad dump path, restarts PLECS once and quarantines
   that file version, so retrying the identical call is refused instead of crashing again. Edit
   the model (or load a copy that compiled) to release it.
-- `plecs_layout_check(..., include_orientation=True)` adds `LAYOUT-004` (info): for polar
-  two-terminal parts, terminal 1 is expected on the reading side (left when horizontal, top
-  when vertical) and the finding carries the `direction`/`flipped` to apply. It is opt-in
-  because it is a house style - 155 of the 239 bundled demos use the other convention.
+- `plecs_layout_check(..., include_orientation=True)` adds `LAYOUT-004` (info): the placement
+  convention is **measured from the 239 bundled models**, not invented. Horizontal power parts
+  put terminal 1 on the right (inductor 78% of 359, breaker 100% of 18), vertical passives and
+  sources put it at the bottom (capacitor 100% of 270, DC source 100% of 181), vertical diodes
+  and thyristors put it on top (96% of 219, 77% of 30). Only (type, axis) pairs with >=10
+  samples and >=70% agreement are checked; each finding carries the `direction`/`flipped` to
+  apply, and the corpus replay drops from 65% of models to 9%. Off by default.
 - `plecs_layout_check` uses the bounding box per component that `getCircuitBitmap` returns, plus
   `Position`/`Points` from the text. It reports `LAYOUT-001` (error: two component boxes
   intersect), `LAYOUT-002` (warning: diagonal wire segment) and `LAYOUT-003` (info: a wire drawn
@@ -424,10 +427,10 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 169 tests
+.venv/bin/python -m pytest -q      # 170 tests
 ```
 
-Current release: **0.4.3** — see [CHANGELOG.md](CHANGELOG.md).
+Current release: **0.4.4** — see [CHANGELOG.md](CHANGELOG.md).
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
   plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,

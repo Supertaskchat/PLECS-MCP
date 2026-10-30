@@ -12,11 +12,19 @@ direction vector, and ``Flipped`` swaps it, so
 which means ``left`` and ``Flipped on`` are the same 180 degree turn and there
 are only two visual states per axis.
 
-The recommended convention is *terminal 1 faces upstream* (towards the source),
-because PLECS uses terminal 1 as the reference terminal for v/i.  The polar
-marker (dot, X, anode, +, ...) then lands wherever the symbol defines it: for an
-inductor/breaker/diode that is terminal 1, for a voltage source the ``+`` is
-terminal 2, so a source points its ``+`` downstream - which is what we want.
+The conventions below are **measured from the 239 models shipped with PLECS
+5.0.7**, not invented: for each (type, axis) the dominant placement is the one
+that at least 70% of at least 10 real instances use. Highlights:
+
+* horizontal two-terminal power parts (inductor 78% of 359, breaker 100% of 18)
+  put terminal 1 on the **right** -> ``Direction left``;
+* vertical passives and sources (capacitor 100% of 270, DC voltage source 100% of
+  181) put terminal 1 at the **bottom**;
+* vertical diodes and thyristors (96% of 219, 77% of 30) put terminal 1 at the
+  **top**, i.e. the valve points down.
+
+Entries with weak support are deliberately absent: the checker stays silent when
+the corpus does not agree, instead of imposing a taste.
 """
 
 from __future__ import annotations
@@ -24,45 +32,41 @@ from __future__ import annotations
 from typing import Any
 
 from . import plecsfile
-from .model_graph import CSCRIPT_TYPES, ModelGraph, build_graph
+from .model_graph import ModelGraph, build_graph
 
 SIDES = ("left", "right", "top", "bottom")
 OPPOSITE = {"left": "right", "right": "left", "top": "bottom", "bottom": "top"}
 TERM1_SIDE = {"right": "left", "left": "right", "up": "bottom", "down": "top"}
 
 # Two-terminal types whose symbol carries a polarity/reference marker.
-POLAR_TYPES = {
-    "Inductor",
-    "Breaker",
-    "Diode",
-    "ZenerDiode",
-    "DCVoltageSource",
-    "ACVoltageSource",
-    "VoltageSource",
-    "CurrentSource",
-    "ACCurrentSource",
-    "Thyristor",
-    "IdealSwitch",
-    # library variants that keep the same terminal geometry
-    "MosfetWithDiode",
-}
 
 # Which terminal the visible marker is drawn on (default 1).  A DC/AC voltage
 # source draws "+" on terminal 2, which is why its arrow points downstream.
-MARKER_TERMINAL = {"DCVoltageSource": 2, "ACVoltageSource": 2, "VoltageSource": 2}
 
 # Three-terminal devices need per-topology judgement (gate/D/S geometry differs
 # between library variants), so they are reported but never auto-chosen.
-MANUAL_TYPES = {"MosfetWithDiode", "IgbtWithDiode", "MOSFET", "IGBT", "Thyristor"}
 
-SOURCE_TYPES = {
-    "VoltageSource",
-    "DCVoltageSource",
-    "ACVoltageSource",
-    "CurrentSource",
-    "ACCurrentSource",
-    "Input",
+
+
+TERM1_SIDE_EXPECTED: dict[tuple[str, str], dict[str, Any]] = {
+    # type, axis -> dominant placement (support in the bundled corpus)
+    ("Inductor", "H"): {"side": "right", "direction": "left", "flipped": "off", "n": 359, "share": 78},
+    ("Breaker", "H"): {"side": "right", "direction": "left", "flipped": "off", "n": 18, "share": 100},
+    ("Diode", "H"): {"side": "right", "direction": "right", "flipped": "on", "n": 52, "share": 73},
+    ("VoltageSource", "H"): {"side": "right", "direction": "right", "flipped": "on", "n": 26, "share": 100},
+    ("Capacitor", "V"): {"side": "bottom", "direction": "down", "flipped": "on", "n": 270, "share": 100},
+    ("DCVoltageSource", "V"): {"side": "bottom", "direction": "up", "flipped": "off", "n": 181, "share": 100},
+    ("VoltageSource", "V"): {"side": "bottom", "direction": "down", "flipped": "on", "n": 66, "share": 100},
+    ("ACVoltageSource", "V"): {"side": "bottom", "direction": "down", "flipped": "on", "n": 35, "share": 100},
+    ("Diode", "V"): {"side": "top", "direction": "down", "flipped": "off", "n": 219, "share": 96},
+    ("Thyristor", "V"): {"side": "top", "direction": "down", "flipped": "off", "n": 30, "share": 77},
 }
+
+
+def expected_for(component_type: str, direction: str) -> dict[str, Any] | None:
+    """Dominant placement for a type on the axis implied by its own direction."""
+    axis = "H" if (direction or "").strip().lower() in ("right", "left") else "V"
+    return TERM1_SIDE_EXPECTED.get((component_type, axis))
 
 
 def term1_side(direction: str, flipped: str) -> str | None:
@@ -89,41 +93,7 @@ def orientation_for(axis: str, wanted: str) -> dict[str, str] | None:
     return None
 
 
-def _axis_for(first: tuple[float, float], second: tuple[float, float]) -> str | None:
-    dx = abs(second[0] - first[0])
-    dy = abs(second[1] - first[1])
-    if dx == 0 and dy == 0:
-        return None
-    return "horizontal" if dx >= dy else "vertical"
-
-
-def _neighbour_side(own: tuple[float, float], other: tuple[float, float]) -> str:
-    dx, dy = other[0] - own[0], other[1] - own[1]
-    if abs(dx) >= abs(dy):
-        return "left" if dx < 0 else "right"
-    return "top" if dy < 0 else "bottom"
-
-
-def _positions(text: str) -> dict[str, tuple[float, float]]:
-    root = plecsfile.parse(text)
-    positions: dict[str, tuple[float, float]] = {}
-    for node in plecsfile.components(root):
-        name = plecsfile.component_name(node)
-        raw = plecsfile._numbers(node.get("Position")) if hasattr(plecsfile, "_numbers") else None
-        if raw is None:
-            values = [
-                float(item)
-                for item in __import__("re").findall(r"-?\d+(?:\.\d+)?", node.get("Position") or "")
-            ]
-        else:
-            values = raw
-        if name and len(values) >= 2:
-            positions[name] = (values[0], values[1])
-    return positions
-
-
 def _neighbours(graph: ModelGraph) -> dict[tuple[str, int], list[tuple[str, int]]]:
-    """(component, terminal) -> directly wired (component, terminal) nodes."""
     links: dict[tuple[str, int], list[tuple[str, int]]] = {}
     for schematic in graph.schematics:
         for connection in schematic.connections:
@@ -139,97 +109,72 @@ def _neighbours(graph: ModelGraph) -> dict[tuple[str, int], list[tuple[str, int]
     return links
 
 
-def _side_of(own: tuple[float, float], other: tuple[float, float]) -> str:
-    dx, dy = other[0] - own[0], other[1] - own[1]
-    if abs(dx) >= abs(dy):
-        return "left" if dx < 0 else "right"
-    return "top" if dy < 0 else "bottom"
-
-
-def _reading_side(
-    component: Any,
-    links: dict[tuple[str, int], list[tuple[str, int]]],
-    positions: dict[str, tuple[float, float]],
-) -> str | None:
-    """Side that reading order wants terminal 1 on: left for horizontal, top for vertical.
-
-    Topology cannot answer this: an AC voltage source has two terminals that are
-    both "the start".  Reading order is the stable convention, and it matches the
-    direction a left-to-right schematic is drawn in.
-    """
-    own = positions.get(component.name)
-    if own is None:
-        return None
-    sides: list[str] = []
-    for terminal in (1, 2):
-        for neighbour, _ in links.get((component.name, terminal), ()):
-            other = positions.get(neighbour)
-            if other is None or neighbour == component.name:
-                continue
-            sides.append(_side_of(own, other))
-    if not sides:
-        return None
-    horizontal = [s for s in sides if s in ("left", "right")]
-    vertical = [s for s in sides if s in ("top", "bottom")]
-    if horizontal and vertical:
-        return None  # corner: the axis is not determined by the neighbours
-    if horizontal:
-        return "left"
-    return "top"
-
-
 def check_orientation(
     model_path: str | None = None,
     text: str | None = None,
     policies: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Report polar two-terminal parts whose terminal 1 is not on the reading side.
+    """Report polar parts that deviate from the convention measured in the corpus.
 
-    ``policies`` may override the wanted side per component type
-    (``{"Breaker": "right"}``), which is how a caller expresses a house style.
+    Only (type, axis) pairs with at least 10 samples and 70% agreement are checked,
+    so a report always means "the shipped models do it the other way", never a
+    personal preference. ``policies`` overrides the wanted terminal-1 side per type
+    (``{"Inductor": "left"}``) for a project that wants its own style.
     """
     if text is None:
         if model_path is None:
             return []
         text = plecsfile.read_text(model_path)
     graph = build_graph("model", text)
-    links = _neighbours(graph)
-    positions = _positions(text)
     policies = policies or {}
 
     findings: list[dict[str, Any]] = []
     for schematic in graph.schematics:
         for component in schematic.components.values():
-            if component.type not in POLAR_TYPES:
+            direction = component.direction
+            if not direction:
                 continue
-            wanted = policies.get(component.type)
-            if wanted is None:
-                wanted = _reading_side(component, links, positions)
-            if wanted is None:
+            actual = term1_side(direction, component.flipped)
+            if actual is None:
                 continue
-            actual = term1_side(component.direction, component.flipped)
-            if actual is None or actual == wanted:
+            override = policies.get(component.type)
+            if override is not None:
+                wanted, expected, n, share = override, None, 0, 0
+            else:
+                convention = expected_for(component.type, direction)
+                if convention is None:
+                    continue
+                wanted = convention["side"]
+                expected = {
+                    "direction": convention["direction"],
+                    "flipped": convention["flipped"],
+                }
+                n, share = convention["n"], convention["share"]
+            if actual == wanted:
                 continue
             axis = "horizontal" if wanted in ("left", "right") else "vertical"
-            expected = orientation_for(axis, wanted)
-            manual = component.type in MANUAL_TYPES
+            if expected is None:
+                expected = orientation_for(axis, wanted)
             findings.append(
                 {
                     "code": "LAYOUT-004",
                     "severity": "info",
                     "message": (
-                        f"{component.type} {component.name!r} has terminal 1 on the {actual} side, "
-                        f"but reading order wants it on the {wanted} side"
-                        + (" (three-terminal symbol: review by hand)" if manual else "")
+                        f"{component.type} {component.name!r} has terminal 1 on the {actual} side; "
+                        f"{share}% of {n} bundled instances put it on the {wanted} side"
+                        if n
+                        else f"{component.type} {component.name!r} has terminal 1 on the {actual} "
+                        f"side; project policy wants it on the {wanted} side"
                     ),
                     "component": component.name,
                     "actual": {
-                        "direction": component.direction,
+                        "direction": direction,
                         "flipped": component.flipped,
                         "term1_side": actual,
                     },
                     "expected": expected,
-                    "auto_fixable": not manual,
+                    "convention": {"n": n, "share": share},
+                    "auto_fixable": True,
                     "source": ".plecs",
                 }
             )
