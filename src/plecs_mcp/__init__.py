@@ -1,3 +1,3 @@
 """PLECS MCP: expose the complete PLECS JSON-RPC interface as MCP tools."""
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"

@@ -60,6 +60,7 @@ from . import library_text as library_text_mod
 from . import modelops
 from . import crashguard
 from . import layout as layout_mod
+from . import orientation as orientation_mod
 from .model_graph import component_types, validate_model_file
 from . import plecsfile
 from . import plotting
@@ -1237,6 +1238,7 @@ def plecs_overview(model_name: str) -> dict[str, Any]:
 def plecs_layout_check(
     model_name: str,
     include_wires: bool = True,
+    include_orientation: bool = False,
     margin: float = 3.0,
 ) -> dict[str, Any]:
     """Check schematic geometry of a model that is open in PLECS.
@@ -1245,9 +1247,12 @@ def plecs_layout_check(
     plus ``Position``/``Points`` from the ``.plecs`` text, and reports only what is
     certain: ``LAYOUT-001`` (error) two component boxes intersect, ``LAYOUT-002``
     (warning) a wire polyline has a diagonal segment, ``LAYOUT-003`` (info) a wire
-    is drawn across a component that is not one of its endpoints. A crossing is
-    cosmetic - PLECS connects only through explicit connections - but it makes the
-    schematic hard to read.
+    is drawn across a component that is not one of its endpoints, ``LAYOUT-004``
+    (info) a polar two-terminal part has terminal 1 on the wrong side for reading
+    order (horizontal: left, vertical: top) and carries the exact ``direction`` /
+    ``flipped`` to apply. Orientation is opt-in (``include_orientation=True``): it is a
+    house style, and roughly two thirds of the bundled demos do not follow it. A crossing is cosmetic - PLECS connects only through
+    explicit connections - but it makes the schematic hard to read.
 
     Top-level schematic only; ``margin`` absorbs the ~2 unit rounding between
     schematic coordinates and rendered pixels.
@@ -1264,12 +1269,19 @@ def plecs_layout_check(
     findings, info = layout_mod.check_layout(
         text, components, include_wires=include_wires, margin=margin
     )
+    if include_orientation:
+        findings.extend(orientation_mod.check_orientation(text=text))
     payload: dict[str, Any] = {
         "ok": not any(item["severity"] == "error" for item in findings),
         "model": model_name,
         "path": path,
         "findings": findings,
-        "info": {**info, "margin": margin, "include_wires": include_wires},
+        "info": {
+            **info,
+            "margin": margin,
+            "include_wires": include_wires,
+            "include_orientation": include_orientation,
+        },
     }
     if lost:
         payload["closed_models"] = lost

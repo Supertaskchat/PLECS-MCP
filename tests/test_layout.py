@@ -195,3 +195,49 @@ def test_heat_sink_overlay_is_not_reported():
     components = {"A": _box(95, 95), "B": _box(195, 95), "HS": _box(145, 95)}
     findings, _ = check_layout(_model(extra), components)
     assert findings == []
+
+
+def test_layout_check_tool_includes_orientation(monkeypatch, tmp_path: Path):
+    text = '''Plecs {
+  Name          "m"
+  Schematic {
+    Component {
+      Type          Inductor
+      Name          "L"
+      Position      [100, 100]
+      Direction     right
+      Flipped       on
+    }
+    Component {
+      Type          Breaker
+      Name          "B"
+      Position      [200, 100]
+      Direction     right
+      Flipped       off
+    }
+    Connection {
+      Type          Wire
+      SrcComponent  "L"
+      SrcTerminal   2
+      DstComponent  "B"
+      DstTerminal   1
+    }
+  }
+}
+'''
+    path = tmp_path / "orient.plecs"
+    path.write_text(text, encoding="utf-8")
+    server.STATE.loaded("orient", str(path))
+
+    def fake_scope(command, arguments):
+        return {"components": {"L": _box(95, 95), "B": _box(195, 95)}}, []
+
+    monkeypatch.setattr(server, "_scope_call", fake_scope)
+    try:
+        with_orientation = server.plecs_layout_check("orient", include_orientation=True)
+        without = server.plecs_layout_check("orient", include_orientation=False)
+    finally:
+        server.STATE.closed("orient")
+    assert [item["code"] for item in with_orientation["findings"]] == ["LAYOUT-004"]
+    assert without["findings"] == []
+    assert with_orientation["info"]["include_orientation"] is True

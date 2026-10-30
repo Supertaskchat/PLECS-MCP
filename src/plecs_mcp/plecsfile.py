@@ -62,7 +62,7 @@ def write_text(path: str | Path, text: str) -> None:
         handle.write(text)
 
 
-def _quotes_open(line: str) -> bool:
+def _quote_count(line: str) -> int:
     count = 0
     escaped = False
     for char in line:
@@ -73,7 +73,11 @@ def _quotes_open(line: str) -> bool:
             escaped = True
         elif char == '"':
             count += 1
-    return count % 2 == 1
+    return count
+
+
+def _quotes_open(line: str) -> bool:
+    return _quote_count(line) % 2 == 1
 
 
 def parse(text: str) -> Node:
@@ -81,10 +85,20 @@ def parse(text: str) -> Node:
     stack = [root]
     offset = 0
     in_string = False
+    string_owner: tuple[Node, int] | None = None
     for line in text.splitlines(keepends=True):
-        stripped = line.rstrip("\n")
+        stripped = line.rstrip("\r\n")
         if in_string:
-            in_string = _quotes_open(stripped)
+            # Continuation of a raw multi-line string value: PLECS writes long
+            # C-Script bodies across physical lines, and a line such as "}" or
+            # "if (x) {" inside them must not be mistaken for structure.
+            if string_owner is not None:
+                owner, index = string_owner
+                name, value = owner.entries[index]
+                owner.entries[index] = (name, value + "\n" + stripped)
+            if _quote_count(stripped) % 2 == 1:
+                in_string = False
+                string_owner = None
             offset += len(line)
             continue
 
@@ -105,6 +119,7 @@ def parse(text: str) -> Node:
                 stack[-1].entries.append((entry.group(2), entry.group(3)))
                 if _quotes_open(stripped):
                     in_string = True
+                    string_owner = (stack[-1], len(stack[-1].entries) - 1)
         offset += len(line)
     while len(stack) > 1:
         node = stack.pop()

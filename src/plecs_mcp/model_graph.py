@@ -60,6 +60,9 @@ class Component:
     output_index: int | None = None
     subsystem: "Schematic | None" = None
     schematic: "Schematic | None" = None
+    direction: str = ""
+    flipped: str = ""
+    position: tuple[int, int] | None = None
     opaque: bool = False
 
 
@@ -242,6 +245,9 @@ def _component(node: plecsfile.Node, schematic: Schematic, text: str) -> Compone
         ports_unknown=ports_unknown,
         output_index=output_index,
         schematic=schematic,
+        direction=_strip(node.get("Direction")),
+        flipped=_strip(node.get("Flipped")),
+        position=tuple(_ints(node.get("Position"))[:2]) or None,
         # Encrypted subsystems carry an opaque blob instead of a schematic.
         opaque=bool(node.get("Encrypted")),
     )

@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.3] - 2026-10-30
+
+### Fixed
+
+- The `.plecs` parser desynchronised on C-Script bodies that PLECS writes as **raw
+  multi-line strings** (`Value "line1` / `line2` / ... `end"`): the continuation lines were
+  read as structure, so everything after them - components and every `Connection` - was lost.
+  `microgrid_vsg.plecs` parsed as 0 connections out of 87. String state is now tracked until
+  the closing quote and continuation lines are folded back into the entry value. All 239
+  bundled files now parse exactly as many `Connection` blocks as the text contains.
+
+### Added
+
+- `plecs_layout_check(..., include_orientation=True)` reports `LAYOUT-004` (info): a polar
+  two-terminal part (`Inductor`, `Breaker`, `Diode`, sources, ...) whose terminal 1 is not on
+  the reading side (left when horizontal, top when vertical), together with the exact
+  `direction`/`flipped` that fixes it. `policies={"Breaker": "right"}` overrides the house
+  style per type. Off by default: it encodes a convention, and 155 of the 239 bundled demos do
+  not follow it.
+
 ## [0.4.2] - 2026-10-30
 
 ### Fixed
