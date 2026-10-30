@@ -60,7 +60,7 @@ from . import library_text as library_text_mod
 from . import modelops
 from . import crashguard
 from . import layout as layout_mod
-from .model_graph import validate_model_file
+from .model_graph import component_types, validate_model_file
 from . import plecsfile
 from . import plotting
 from .diagnose import diagnose, with_hint
@@ -171,6 +171,17 @@ def _guard_quarantine(model_name: str, action: str) -> None:
         "call would kill PLECS again. Fix the model (compare against a version that "
         "compiled, or revert the last edits and re-apply them one at a time), then retry."
     )
+
+
+def _library_types(model_name: str, model_path: str | None = None) -> dict[str, str]:
+    """English component types from the .plecs text (RPC tree types are localized)."""
+    path = model_path or STATE.path_for(model_name)
+    if not path:
+        return {}
+    try:
+        return component_types(path)
+    except (OSError, ValueError):
+        return {}
 
 
 def _raw(method: str, params: list[Any] | None = None, timeout: float | None = None) -> Any:
@@ -565,7 +576,7 @@ def plecs_get_model_tree(model_path: str, summary: bool = False, decode: bool = 
         tree = decode_model_tree(raw)
     except PlecsPayloadError as exc:
         raise ToolError(str(exc)) from exc
-    return summarize_tree(tree) if summary else tree
+    return summarize_tree(tree, _library_types(Path(model_path).stem, model_path)) if summary else tree
 
 
 # ---------------------------------------------------------------- parameters
@@ -1202,7 +1213,7 @@ def plecs_overview(model_name: str) -> dict[str, Any]:
     """
     path = _model_path(model_name)
     tree = decode_model_tree(_raw("plecs.getModelTree", [path]))
-    summary = summarize_tree(tree)
+    summary = summarize_tree(tree, _library_types(model_name))
     params = _raw("plecs.get", [model_name]) or {}
     stats = _raw("plecs.statistics") or {}
     record = next((item for item in stats.get("models", []) if item.get("id") == model_name), {})
@@ -1217,7 +1228,7 @@ def plecs_overview(model_name: str) -> dict[str, Any]:
         "analyses": summary["analyses"],
         "scopes": summary["scopes"],
         "subsystems": [item["path"] for item in summary["subsystems"]],
-        "outports": outports_from_tree(tree),
+        "outports": outports_from_tree(tree, _library_types(model_name)),
         "scripts": plecsfile.script_names(path),
     }
 
@@ -1289,7 +1300,7 @@ def plecs_validate(
         errors.append(f"model file is missing on disk: {path}")
 
     tree = decode_model_tree(_raw("plecs.getModelTree", [path]))
-    summary = summarize_tree(tree)
+    summary = summarize_tree(tree, _library_types(model_name))
     params = _raw("plecs.get", [model_name]) or {}
 
     def number(key: str) -> float | None:
@@ -1308,7 +1319,7 @@ def plecs_validate(
     if solver and solver not in ("auto", "dopri", "radau", "discrete", "sdirk", "esdirk"):
         warnings.append(f"unusual solver name {solver!r}")
 
-    outports = outports_from_tree(tree)
+    outports = outports_from_tree(tree, _library_types(model_name))
     if not outports:
         warnings.append("no top-level Signal Outport: simulate returns no data (use scope CSV)")
     if not summary["analyses"]:
@@ -1461,7 +1472,7 @@ def plecs_plot(
             scope = None
             if path:
                 try:
-                    scopes = summarize_tree(decode_model_tree(_raw("plecs.getModelTree", [path])))["scopes"]
+                    scopes = summarize_tree(decode_model_tree(_raw("plecs.getModelTree", [path])), _library_types(model_name, path))["scopes"]
                     scope = scopes[0] if scopes else None
                 except ToolError:
                     scope = None
@@ -1489,7 +1500,7 @@ def plecs_plot(
             path = STATE.path_for(model_name)
             if path:
                 try:
-                    names = [item["name"] for item in outports_from_tree(decode_model_tree(_raw("plecs.getModelTree", [path])))]
+                    names = [item["name"] for item in outports_from_tree(decode_model_tree(_raw("plecs.getModelTree", [path])), _library_types(model_name, path))]
                 except ToolError:
                     names = None
             png = plotting.time_series_png(time, channels, names=names, title=f"{model_name}: waveform")

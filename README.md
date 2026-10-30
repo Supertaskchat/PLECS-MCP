@@ -4,7 +4,7 @@ An MCP server that exposes the **complete Plexim PLECS Standalone JSON-RPC inter
 
 Highlights:
 
-- One MCP tool per RPC method (22/22 on PLECS 5.0.6), plus `plecs_rpc` and `plecs_batch` escape hatches
+- One MCP tool per RPC method (22/22 on PLECS 5.0.7), plus `plecs_rpc` and `plecs_batch` escape hatches
 - `plecs_run_script` is verified: `[model, {"ScriptName": name}]`; script names are listed by `plecs_overview`
 - `plecs_validate` now runs a static connection graph check: missing components, subsystem ports,
   C-Script terminal ranges, top-level Output indices and C-Script code indices
@@ -420,10 +420,10 @@ plecs_batch([{"method": "plecs.get", "params": [f"{model}/L1", "L"]},
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q      # 160 tests
+.venv/bin/python -m pytest -q      # 161 tests
 ```
 
-Current release: **0.4.1** — see [CHANGELOG.md](CHANGELOG.md).
+Current release: **0.4.2** — see [CHANGELOG.md](CHANGELOG.md).
 
 - Unit: base64/model tree, summary maths, config precedence, paths, locks, app discovery/launch,
   plotting, checks, tasks, THD, model scan/clone, artifacts/FMU, library flattening, resources,

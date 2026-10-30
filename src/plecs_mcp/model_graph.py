@@ -958,3 +958,28 @@ def validate_model_file(
         plecsfile.read_text(path),
         include_code=include_code,
     )
+
+
+def component_types(model_path: str | Path) -> dict[str, str]:
+    """Map ``model/Sub/Name`` -> the *English* library type from the ``.plecs`` text.
+
+    ``plecs.getModelTree`` returns localized type names (``Scope`` -> ``示波器``) and no
+    longer carries a ``Library type`` property, so the file is the only stable source.
+    """
+    text = plecsfile.read_text(model_path)
+    root = plecsfile.parse(text)
+    model_name = Path(str(model_path)).stem
+    types: dict[str, str] = {}
+    for node in plecsfile.components(root):
+        name = plecsfile.component_name(node)
+        if not name:
+            continue
+        kind = (node.get("Type") or "").strip().strip('"')
+        if kind:
+            types[name] = kind
+    graph = build_graph(model_name, text)
+    paths: dict[str, str] = {}
+    for schematic in graph.schematics:
+        for component in schematic.components.values():
+            paths[f"{schematic.path}/{component.name}"] = component.type
+    return {**types, **paths}

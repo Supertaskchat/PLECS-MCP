@@ -7,6 +7,7 @@ from plecs_mcp.codec import (
     PlecsPayloadError,
     base64_to_text,
     decode_model_tree,
+    outports_from_tree,
     summarize_tree,
     write_bytes,
 )
@@ -62,3 +63,18 @@ def test_write_bytes_refuses_overwrite(tmp_path):
         write_bytes(str(target), b"b")
     assert write_bytes(str(target), b"c", overwrite=True)["bytes"] == 1
     assert target.read_bytes() == b"c"
+
+
+def test_summarize_tree_uses_english_types_when_ui_is_localised():
+    """PLECS returns localized type names (Scope -> 示波器); the .plecs text is stable."""
+    tree = {
+        "name": "m",
+        "children": [
+            {"kind": "component", "name": "Scope", "type": "示波器", "children": []},
+            {"kind": "component", "name": "Out", "type": "信号输出端口", "children": []},
+        ],
+    }
+    assert summarize_tree(tree)["scopes"] == []
+    assert summarize_tree(tree, {"m/Scope": "Scope"})["scopes"] == ["m/Scope"]
+    assert outports_from_tree(tree) == []
+    assert outports_from_tree(tree, {"Out": "Output"}) == [{"name": "Out", "position": None}]

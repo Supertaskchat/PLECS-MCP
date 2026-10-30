@@ -53,7 +53,12 @@ def _property(node: dict[str, Any], name: str) -> Any:
     return None
 
 
-def _walk(node: dict[str, Any], path: str, out: dict[str, Any]) -> None:
+def _walk(
+    node: dict[str, Any],
+    path: str,
+    out: dict[str, Any],
+    types: dict[str, str],
+) -> None:
     for child in _children(node):
         kind = child.get("kind")
         name = child.get("name") or ""
@@ -71,15 +76,22 @@ def _walk(node: dict[str, Any], path: str, out: dict[str, Any]) -> None:
         elif kind == "subsystem":
             out["subsystems"].append({"name": name, "path": child_path})
         elif kind == "component":
-            if (child.get("type") or "").endswith("Scope"):
+            # ``type`` is localised by the UI language (Scope -> 示波器); the English
+            # type from the .plecs text wins when the caller supplies it.
+            library_type = types.get(child_path) or types.get(name) or child.get("type") or ""
+            if str(library_type).endswith("Scope"):
                 out["scopes"].append(child_path)
-            out["components"].append({"name": name, "type": child.get("type"), "path": child_path})
+            out["components"].append(
+                {"name": name, "type": library_type or child.get("type"), "path": child_path}
+            )
         elif kind == "parameter":
             out["parameters"].append(name)
-        _walk(child, child_path, out)
+        _walk(child, child_path, out, types)
 
 
-def summarize_tree(tree: dict[str, Any]) -> dict[str, Any]:
+def summarize_tree(
+    tree: dict[str, Any], types: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Condense a model tree into names/counts (size is dominated by connections)."""
     out: dict[str, Any] = {
         "name": tree.get("name"),
@@ -91,7 +103,7 @@ def summarize_tree(tree: dict[str, Any]) -> dict[str, Any]:
         "scopes": [],
         "parameters": [],
     }
-    _walk(tree, tree.get("name") or "", out)
+    _walk(tree, tree.get("name") or "", out, types or {})
     out["counts"].pop("connection", None)
     return out
 
@@ -112,16 +124,29 @@ def write_bytes(path: str | Path, data: bytes, overwrite: bool = False) -> dict[
     return {"path": str(target), "bytes": len(data), "sha256": sha256_bytes(data)}
 
 
-def outports_from_tree(tree: dict[str, Any]) -> list[dict[str, Any]]:
+OUTPORT_TYPES = {"Output", "Signal Outport", "SignalOutport"}
+
+
+def outports_from_tree(
+    tree: dict[str, Any], types: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
     """Top-level Signal Outports only (nested subsystem ports are not model outputs).
 
     PLECS does not expose a port index over RPC; names/positions are returned instead.
+    ``types`` maps component name/path to the English library type from the .plecs text,
+    which is the only stable identification when the UI is localised.
     """
-    return [
-        {"name": _property(child, "Name"), "position": _property(child, "Position")}
-        for child in _children(tree)
-        if _property(child, "Library type") == "Signal Outport"
-    ]
+    types = types or {}
+    outports = []
+    for child in _children(tree):
+        name = child.get("name") or ""
+        library_type = types.get(name) or _property(child, "Library type") or ""
+        if library_type not in OUTPORT_TYPES:
+            continue
+        outports.append(
+            {"name": _property(child, "Name") or name, "position": _property(child, "Position")}
+        )
+    return outports
 
 
 def parse_merged_items(lines: Any) -> list[dict[str, Any]]:

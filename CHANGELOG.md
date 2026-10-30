@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.2] - 2026-10-30
+
+### Fixed
+
+- `plecs_overview`, `plecs_validate` and `plecs_plot` no longer depend on English names
+  returned by `plecs.getModelTree`. On a localised UI PLECS reports `Scope` as `示波器`, so
+  `scopes`/`outports` came back empty: `plecs_plot(kind="waveform")` fell back to matplotlib and
+  failed with "needs top-level outports", and `plecs_validate` warned "no top-level Signal
+  Outport" for models that have one. Component types are now taken from the `.plecs` text,
+  which is language independent.
+
+### Verified
+
+- Checked against PLECS **5.0.7** (macOS arm64, build f9f57e8a 22.10.2026): RPC surface is
+  still the same 22 methods with unchanged payload shapes; full suite 161 tests pass, including
+  the live-RPC tests.
+
 ## [0.4.1] - 2026-10-27
 
 ### Added
